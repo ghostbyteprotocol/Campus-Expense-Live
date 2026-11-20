@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject Native Admin + Notifications
+      - name: Build Capacitor & Inject Native Foreground Live Sync
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -53,10 +53,10 @@ jobs:
           </device-admin>
           EOF
 
-          # 2. Create Native Java Classes (DeviceAdmin + Background Sync + Midnight Alarm)
           PKG_DIR="android/app/src/main/java/com/ayan/expenselive"
           mkdir -p "$PKG_DIR"
 
+          # 2. Device Admin Receiver
           cat << 'EOF' > "$PKG_DIR/AdminReceiver.java"
           package com.ayan.expenselive;
           import android.app.admin.DeviceAdminReceiver;
@@ -70,17 +70,22 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > "$PKG_DIR/SyncReceiver.java"
+          # 3. Persistent Foreground Live Monitor Service (Checks every 2 mins + 12 AM Report)
+          cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
+          import android.app.Notification;
           import android.app.NotificationChannel;
           import android.app.NotificationManager;
           import android.app.PendingIntent;
-          import android.content.BroadcastReceiver;
+          import android.app.Service;
           import android.content.Context;
           import android.content.Intent;
           import android.content.SharedPreferences;
           import android.os.Build;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
           import androidx.core.app.NotificationCompat;
           import org.json.JSONArray;
           import org.json.JSONObject;
@@ -88,17 +93,41 @@ jobs:
           import java.io.InputStreamReader;
           import java.net.HttpURLConnection;
           import java.net.URL;
+          import java.util.Calendar;
 
-          public class SyncReceiver extends BroadcastReceiver {
+          public class LiveMonitorService extends Service {
               private static final String API_URL = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
-              private static final String CHANNEL_ID = "expense_live_channel";
+              private static final String SILENT_CHANNEL = "live_monitor_silent";
+              private static final String ALERT_CHANNEL = "expense_live_alerts";
+              private Handler handler;
+              private Runnable checkerRunnable;
 
               @Override
-              public void onReceive(Context context, Intent intent) {
-                  String mode = intent.getStringExtra("mode");
-                  if (mode == null) mode = "LIVE_CHECK";
-                  final String runMode = mode;
+              public void onCreate() {
+                  super.onCreate();
+                  createChannels();
+                  startForeground(999, buildSilentNotification());
 
+                  handler = new Handler(Looper.getMainLooper());
+                  checkerRunnable = new Runnable() {
+                      @Override
+                      public void run() {
+                          checkExpensesNow(false);
+                          handler.postDelayed(this, 2 * 60 * 1000); // Check every 2 minutes
+                      }
+                  };
+                  handler.post(checkerRunnable);
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  if (intent != null && "MIDNIGHT_REPORT".equals(intent.getStringExtra("mode"))) {
+                      checkExpensesNow(true);
+                  }
+                  return START_STICKY;
+              }
+
+              private void checkExpensesNow(boolean isMidnightReport) {
                   new Thread(() -> {
                       try {
                           URL url = new URL(API_URL);
@@ -128,15 +157,24 @@ jobs:
                           String fingerprint = date + "|" + total + "|" + m + "|" + l + "|" + s + "|" + d + "|" + o;
                           String summary = "Total: ₹" + total + " | M:" + m + " N:" + l + " A:" + s + " Nt:" + d + (o.equals("-") ? "" : " Oth:" + o);
 
-                          SharedPreferences prefs = context.getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                          SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
                           String lastFp = prefs.getString("last_fingerprint", "");
 
-                          if ("MIDNIGHT_REPORT".equals(runMode)) {
-                              sendNotification(context, "🌙 Daily 12 AM Expense Report (" + date + ")", summary, 1002);
-                          } else if (!fingerprint.equals(lastFp)) {
+                          // Also check if it's 12:00 AM window (00:00 - 00:03)
+                          Calendar now = Calendar.getInstance();
+                          String todayKey = now.get(Calendar.YEAR) + "-" + now.get(Calendar.DAY_OF_YEAR);
+                          boolean isMidnightWindow = (now.get(Calendar.HOUR_OF_DAY) == 0 && now.get(Calendar.MINUTE) <= 3);
+                          String lastMidnightSent = prefs.getString("last_midnight_key", "");
+
+                          if (isMidnightReport || (isMidnightWindow && !todayKey.equals(lastMidnightSent))) {
+                              prefs.edit().putString("last_midnight_key", todayKey).apply();
+                              sendAlertNotification("🌙 Daily 12 AM Expense Summary (" + date + ")", summary, 1002);
+                          }
+
+                          if (!fingerprint.equals(lastFp)) {
                               prefs.edit().putString("last_fingerprint", fingerprint).apply();
                               if (!lastFp.isEmpty()) {
-                                  sendNotification(context, "⚡ New Expense Update (" + date + ")", summary, 1001);
+                                  sendAlertNotification("⚡ Expense Updated (" + date + ")", summary, (int) (System.currentTimeMillis() % 10000));
                               }
                           }
                       } catch (Exception e) {
@@ -145,76 +183,81 @@ jobs:
                   }).start();
               }
 
-              private void sendNotification(Context context, String title, String body, int notifId) {
-                  NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+              private void createChannels() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Campus Expense Alerts", NotificationManager.IMPORTANCE_HIGH);
-                      nm.createNotificationChannel(ch);
-                  }
-                  Intent openIntent = new Intent(context, MainActivity.class);
-                  PendingIntent pi = PendingIntent.getActivity(context, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      NotificationChannel silent = new NotificationChannel(SILENT_CHANNEL, "Live Sync Status", NotificationManager.IMPORTANCE_MIN);
+                      silent.setShowBadge(false);
+                      nm.createNotificationChannel(silent);
 
-                  NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
+                      NotificationChannel alert = new NotificationChannel(ALERT_CHANNEL, "Expense Update Alerts", NotificationManager.IMPORTANCE_HIGH);
+                      nm.createNotificationChannel(alert);
+                  }
+              }
+
+              private Notification buildSilentNotification() {
+                  Intent openIntent = new Intent(this, MainActivity.class);
+                  PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                  return new NotificationCompat.Builder(this, SILENT_CHANNEL)
+                      .setSmallIcon(android.R.drawable.ic_popup_sync)
+                      .setContentTitle("Campus Expense Live")
+                      .setContentText("Live cloud sync is active")
+                      .setOngoing(true)
+                      .setPriority(NotificationCompat.PRIORITY_MIN)
+                      .setContentIntent(pi)
+                      .build();
+              }
+
+              private void sendAlertNotification(String title, String body, int notifId) {
+                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                  Intent openIntent = new Intent(this, MainActivity.class);
+                  PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  NotificationCompat.Builder builder = new NotificationCompat.Builder(this, ALERT_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setContentTitle(title)
                       .setContentText(body)
                       .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                       .setPriority(NotificationCompat.PRIORITY_HIGH)
+                      .setDefaults(NotificationCompat.DEFAULT_ALL)
                       .setAutoCancel(true)
                       .setContentIntent(pi);
 
                   nm.notify(notifId, builder.build());
               }
+
+              @Override
+              public IBinder onBind(Intent intent) { return null; }
+
+              @Override
+              public void onDestroy() {
+                  if (handler != null && checkerRunnable != null) handler.removeCallbacks(checkerRunnable);
+                  super.onDestroy();
+              }
           }
           EOF
 
+          # 4. Boot Receiver to auto-start LiveMonitorService after phone reboot
           cat << 'EOF' > "$PKG_DIR/BootReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
           import android.content.Context;
           import android.content.Intent;
+          import android.os.Build;
           public class BootReceiver extends BroadcastReceiver {
               @Override
               public void onReceive(Context context, Intent intent) {
-                  SchedulerHelper.scheduleAll(context);
-              }
-          }
-          EOF
-
-          cat << 'EOF' > "$PKG_DIR/SchedulerHelper.java"
-          package com.ayan.expenselive;
-          import android.app.AlarmManager;
-          import android.app.PendingIntent;
-          import android.content.Context;
-          import android.content.Intent;
-          import java.util.Calendar;
-
-          public class SchedulerHelper {
-              public static void scheduleAll(Context context) {
-                  AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-
-                  // 1. Live Check every 15 minutes
-                  Intent liveIntent = new Intent(context, SyncReceiver.class);
-                  liveIntent.putExtra("mode", "LIVE_CHECK");
-                  PendingIntent livePi = PendingIntent.getBroadcast(context, 101, liveIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                  am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 60000, 15 * 60 * 1000, livePi);
-
-                  // 2. Daily 12:00 AM Midnight Report
-                  Calendar midnight = Calendar.getInstance();
-                  midnight.set(Calendar.HOUR_OF_DAY, 0);
-                  midnight.set(Calendar.MINUTE, 0);
-                  midnight.set(Calendar.SECOND, 5);
-                  if (midnight.getTimeInMillis() <= System.currentTimeMillis()) {
-                      midnight.add(Calendar.DAY_OF_YEAR, 1);
+                  Intent serviceIntent = new Intent(context, LiveMonitorService.class);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      context.startForegroundService(serviceIntent);
+                  } else {
+                      context.startService(serviceIntent);
                   }
-                  Intent midIntent = new Intent(context, SyncReceiver.class);
-                  midIntent.putExtra("mode", "MIDNIGHT_REPORT");
-                  PendingIntent midPi = PendingIntent.getBroadcast(context, 102, midIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                  am.setRepeating(AlarmManager.RTC_WAKEUP, midnight.getTimeInMillis(), AlarmManager.INTERVAL_DAY, midPi);
               }
           }
           EOF
 
+          # 5. MainActivity
           cat << 'EOF' > "$PKG_DIR/MainActivity.java"
           package com.ayan.expenselive;
 
@@ -224,8 +267,11 @@ jobs:
           import android.content.Context;
           import android.content.Intent;
           import android.content.pm.PackageManager;
+          import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
+          import android.os.PowerManager;
+          import android.provider.Settings;
           import android.webkit.JavascriptInterface;
           import android.widget.Toast;
           import androidx.core.app.ActivityCompat;
@@ -248,6 +294,18 @@ jobs:
                       }
                   }
 
+                  // Ask to ignore Battery Optimization so notifications never sleep
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                      if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                          try {
+                              Intent battIntent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                              battIntent.setData(Uri.parse("package:" + getPackageName()));
+                              startActivity(battIntent);
+                          } catch (Exception ignored) {}
+                      }
+                  }
+
                   if (!dpm.isAdminActive(adminComp)) {
                       Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
                       intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp);
@@ -255,10 +313,12 @@ jobs:
                       startActivityForResult(intent, 502);
                   }
 
-                  SchedulerHelper.scheduleAll(this);
-                  Intent immediateSync = new Intent(this, SyncReceiver.class);
-                  immediateSync.putExtra("mode", "LIVE_CHECK");
-                  sendBroadcast(immediateSync);
+                  Intent serviceIntent = new Intent(this, LiveMonitorService.class);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(serviceIntent);
+                  } else {
+                      startService(serviceIntent);
+                  }
 
                   this.bridge.getWebView().addJavascriptInterface(new Object() {
                       @JavascriptInterface
@@ -277,10 +337,10 @@ jobs:
           }
           EOF
 
-          # 3. Inject Permissions & Receivers into AndroidManifest.xml
+          # 6. Inject Permissions & Service into AndroidManifest.xml
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"\/>\n    <application/' "$MANIFEST"
-          sed -i 's/<\/application>/        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".SyncReceiver" android:exported="false" \/>\n        <receiver android:name=".BootReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.app.action.BOOT_COMPLETED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
+          sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"\/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"\/>\n    <application/' "$MANIFEST"
+          sed -i 's/<\/application>/        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".BootReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
 
           npx cap sync android
 
@@ -296,7 +356,7 @@ jobs:
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Campus Expense Live v1.0.${{ github.run_number }}
-          body: "Read-only live expense viewer with Device Admin uninstall protection, 15-min live alerts, and 12 AM daily summary."
+          body: "Added persistent Foreground Live Monitor Service (2-min instant updates + 12 AM summary) and battery optimization bypass."
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
