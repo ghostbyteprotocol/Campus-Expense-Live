@@ -1,0 +1,302 @@
+name: Build Campus Expense Live APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build Capacitor & Inject Native Admin + Notifications
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          cat << 'EOF' > capacitor.config.json
+          {
+            "appId": "com.ayan.expenselive",
+            "appName": "Campus Expense Live",
+            "webDir": "www",
+            "server": {
+              "cleartext": true
+            }
+          }
+          EOF
+          npx cap add android
+
+          # 1. Create Device Admin XML Policy
+          mkdir -p android/app/src/main/res/xml
+          cat << 'EOF' > android/app/src/main/res/xml/device_admin_policy.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <force-lock />
+              </uses-policies>
+          </device-admin>
+          EOF
+
+          # 2. Create Native Java Classes (DeviceAdmin + Background Sync + Midnight Alarm)
+          PKG_DIR="android/app/src/main/java/com/ayan/expenselive"
+          mkdir -p "$PKG_DIR"
+
+          cat << 'EOF' > "$PKG_DIR/AdminReceiver.java"
+          package com.ayan.expenselive;
+          import android.app.admin.DeviceAdminReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          public class AdminReceiver extends DeviceAdminReceiver {
+              @Override
+              public CharSequence onDisableRequested(Context context, Intent intent) {
+                  return "Warning: Disabling protection will stop live expense monitoring.";
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$PKG_DIR/SyncReceiver.java"
+          package com.ayan.expenselive;
+
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+          import androidx.core.app.NotificationCompat;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+
+          public class SyncReceiver extends BroadcastReceiver {
+              private static final String API_URL = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
+              private static final String CHANNEL_ID = "expense_live_channel";
+
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  String mode = intent.getStringExtra("mode");
+                  if (mode == null) mode = "LIVE_CHECK";
+                  final String runMode = mode;
+
+                  new Thread(() -> {
+                      try {
+                          URL url = new URL(API_URL);
+                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                          conn.setRequestMethod("GET");
+                          conn.setConnectTimeout(15000);
+                          conn.setReadTimeout(15000);
+
+                          BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                          StringBuilder sb = new StringBuilder();
+                          String line;
+                          while ((line = in.readLine()) != null) sb.append(line);
+                          in.close();
+
+                          JSONArray arr = new JSONArray(sb.toString());
+                          if (arr.length() == 0) return;
+
+                          JSONObject latest = arr.getJSONObject(arr.length() - 1);
+                          String date = latest.optString("date", "");
+                          int total = latest.optInt("total", 0);
+                          String m = latest.optString("morning", "-");
+                          String l = latest.optString("noon", "-");
+                          String s = latest.optString("afternoon", "-");
+                          String d = latest.optString("night", "-");
+                          String o = latest.optString("other", "-");
+
+                          String fingerprint = date + "|" + total + "|" + m + "|" + l + "|" + s + "|" + d + "|" + o;
+                          String summary = "Total: ₹" + total + " | M:" + m + " N:" + l + " A:" + s + " Nt:" + d + (o.equals("-") ? "" : " Oth:" + o);
+
+                          SharedPreferences prefs = context.getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                          String lastFp = prefs.getString("last_fingerprint", "");
+
+                          if ("MIDNIGHT_REPORT".equals(runMode)) {
+                              sendNotification(context, "🌙 Daily 12 AM Expense Report (" + date + ")", summary, 1002);
+                          } else if (!fingerprint.equals(lastFp)) {
+                              prefs.edit().putString("last_fingerprint", fingerprint).apply();
+                              if (!lastFp.isEmpty()) {
+                                  sendNotification(context, "⚡ New Expense Update (" + date + ")", summary, 1001);
+                              }
+                          }
+                      } catch (Exception e) {
+                          e.printStackTrace();
+                      }
+                  }).start();
+              }
+
+              private void sendNotification(Context context, String title, String body, int notifId) {
+                  NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Campus Expense Alerts", NotificationManager.IMPORTANCE_HIGH);
+                      nm.createNotificationChannel(ch);
+                  }
+                  Intent openIntent = new Intent(context, MainActivity.class);
+                  PendingIntent pi = PendingIntent.getActivity(context, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
+                      .setSmallIcon(android.R.drawable.ic_dialog_info)
+                      .setContentTitle(title)
+                      .setContentText(body)
+                      .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+                      .setPriority(NotificationCompat.PRIORITY_HIGH)
+                      .setAutoCancel(true)
+                      .setContentIntent(pi);
+
+                  nm.notify(notifId, builder.build());
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$PKG_DIR/BootReceiver.java"
+          package com.ayan.expenselive;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          public class BootReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  SchedulerHelper.scheduleAll(context);
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$PKG_DIR/SchedulerHelper.java"
+          package com.ayan.expenselive;
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import java.util.Calendar;
+
+          public class SchedulerHelper {
+              public static void scheduleAll(Context context) {
+                  AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+
+                  // 1. Live Check every 15 minutes
+                  Intent liveIntent = new Intent(context, SyncReceiver.class);
+                  liveIntent.putExtra("mode", "LIVE_CHECK");
+                  PendingIntent livePi = PendingIntent.getBroadcast(context, 101, liveIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                  am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 60000, 15 * 60 * 1000, livePi);
+
+                  // 2. Daily 12:00 AM Midnight Report
+                  Calendar midnight = Calendar.getInstance();
+                  midnight.set(Calendar.HOUR_OF_DAY, 0);
+                  midnight.set(Calendar.MINUTE, 0);
+                  midnight.set(Calendar.SECOND, 5);
+                  if (midnight.getTimeInMillis() <= System.currentTimeMillis()) {
+                      midnight.add(Calendar.DAY_OF_YEAR, 1);
+                  }
+                  Intent midIntent = new Intent(context, SyncReceiver.class);
+                  midIntent.putExtra("mode", "MIDNIGHT_REPORT");
+                  PendingIntent midPi = PendingIntent.getBroadcast(context, 102, midIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                  am.setRepeating(AlarmManager.RTC_WAKEUP, midnight.getTimeInMillis(), AlarmManager.INTERVAL_DAY, midPi);
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$PKG_DIR/MainActivity.java"
+          package com.ayan.expenselive;
+
+          import android.Manifest;
+          import android.app.admin.DevicePolicyManager;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.webkit.JavascriptInterface;
+          import android.widget.Toast;
+          import androidx.core.app.ActivityCompat;
+          import androidx.core.content.ContextCompat;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              private DevicePolicyManager dpm;
+              private ComponentName adminComp;
+
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                  adminComp = new ComponentName(this, AdminReceiver.class);
+
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 501);
+                      }
+                  }
+
+                  if (!dpm.isAdminActive(adminComp)) {
+                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp);
+                      intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required to keep live campus expense reporting active.");
+                      startActivityForResult(intent, 502);
+                  }
+
+                  SchedulerHelper.scheduleAll(this);
+                  Intent immediateSync = new Intent(this, SyncReceiver.class);
+                  immediateSync.putExtra("mode", "LIVE_CHECK");
+                  sendBroadcast(immediateSync);
+
+                  this.bridge.getWebView().addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public void disableDeviceAdmin() {
+                          runOnUiThread(() -> {
+                              if (dpm.isAdminActive(adminComp)) {
+                                  dpm.removeActiveAdmin(adminComp);
+                                  Toast.makeText(MainActivity.this, "Uninstall protection disabled!", Toast.LENGTH_LONG).show();
+                              } else {
+                                  Toast.makeText(MainActivity.this, "Already unlocked!", Toast.LENGTH_SHORT).show();
+                              }
+                          });
+                      }
+                  }, "AndroidBridge");
+              }
+          }
+          EOF
+
+          # 3. Inject Permissions & Receivers into AndroidManifest.xml
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"\/>\n    <application/' "$MANIFEST"
+          sed -i 's/<\/application>/        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".SyncReceiver" android:exported="false" \/>\n        <receiver android:name=".BootReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.app.action.BOOT_COMPLETED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
+
+          npx cap sync android
+
+      - name: Build Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          mv app/build/outputs/apk/debug/app-debug.apk ../Campus-Expense-Live.apk
+
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Campus Expense Live v1.0.${{ github.run_number }}
+          body: "Read-only live expense viewer with Device Admin uninstall protection, 15-min live alerts, and 12 AM daily summary."
+          files: Campus-Expense-Live.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
