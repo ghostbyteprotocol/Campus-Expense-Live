@@ -66,6 +66,23 @@
       flex-shrink: 0;
     }
 
+    /* Highlighted Message Banner from Ayan */
+    .notice-banner {
+      display: none;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(139, 92, 246, 0.18));
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      border-radius: 18px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+    .notice-banner.show { display: block; }
+    .notice-top {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 11px; font-weight: 800; color: var(--primary);
+      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 5px;
+    }
+    .notice-text { font-size: 14px; font-weight: 700; line-height: 1.45; }
+
     /* Summary Card */
     .hero {
       background: var(--surface); border: 1px solid var(--border);
@@ -164,6 +181,15 @@
     <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">☀️ Light</button>
   </div>
 
+  <!-- Live Message Banner from Ayan -->
+  <div class="notice-banner" id="noticeBanner">
+    <div class="notice-top">
+      <span>🔔 Message from Ayan</span>
+      <span id="noticeTime" style="font-size:10px; opacity:0.85;"></span>
+    </div>
+    <div class="notice-text" id="noticeText"></div>
+  </div>
+
   <div class="hero">
     <div class="hero-top">
       <div>
@@ -221,7 +247,6 @@
   let tapCount = 0;
   let tapTimer = null;
 
-  // Theme Switcher (Dark / Light)
   function applySavedTheme() {
     const mode = localStorage.getItem('report_theme') || 'dark';
     const isLight = mode === 'light';
@@ -235,7 +260,6 @@
     document.getElementById('themeBtn').innerText = isLight ? '🌙 Dark' : '☀️ Light';
   }
 
-  // 5-Tap Secret Admin Control for Uninstall Unblock
   function handleSecretTap() {
     tapCount++;
     clearTimeout(tapTimer);
@@ -271,7 +295,6 @@
     return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
   }
 
-  // Auto-sync week to current date whenever day/week changes
   function autoSyncWeekWithDate() {
     const todayKey = getTodayKey();
     if (lastKnownDateKey && lastKnownDateKey !== todayKey) {
@@ -313,7 +336,20 @@
     try {
       const res = await fetch(API_URL);
       const allRows = await res.json();
-      rawData = allRows.filter(r => r.date !== "__SYS_CMD__");
+
+      // Check for active message banner from Ayan
+      const alertRow = allRows.find(r => String(r.date || '').includes("2099"));
+      const banner = document.getElementById('noticeBanner');
+      if (alertRow && alertRow.morning === "RING" && alertRow.noon && alertRow.noon !== "-") {
+        document.getElementById('noticeText').innerText = alertRow.noon;
+        document.getElementById('noticeTime').innerText = (alertRow.night && alertRow.night !== "-") ? alertRow.night : "";
+        banner.classList.add('show');
+      } else {
+        banner.classList.remove('show');
+      }
+
+      rawData = allRows.filter(r => !String(r.date || '').includes("2099") && r.date !== "__SYS_CMD__");
+
       const now = new Date();
       const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
       const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
@@ -393,7 +429,7 @@
     lastKnownDateKey = getTodayKey();
     applySavedTheme();
     fetchLiveReport();
-    setInterval(fetchLiveReport, 30000);
+    setInterval(fetchLiveReport, 15000);
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         weekOffset = 0;
