@@ -76,7 +76,7 @@ jobs:
           }
           EOF
 
-          # 3. Full-Screen Alert Activity with Big STOP ALARM Button
+          # 3. Full-Screen Alert Activity with Ayan's Name, App Header & Big STOP ALARM Button
           cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
           package com.ayan.expenselive;
 
@@ -143,32 +143,65 @@ jobs:
 
                   String msg = getIntent().getStringExtra("msg");
                   if (msg == null || msg.trim().isEmpty()) {
-                      msg = "Ayan sent an urgent message!";
+                      msg = "জরুরি দরকার! একটু কথা আছে।";
                   }
 
                   LinearLayout root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
                   root.setGravity(Gravity.CENTER);
                   root.setBackgroundColor(Color.parseColor("#0B0914"));
-                  root.setPadding(64, 80, 64, 80);
+                  root.setPadding(56, 70, 56, 70);
 
-                  TextView badge = new TextView(this);
-                  badge.setText("🔔 MESSAGE FROM AYAN");
-                  badge.setTextColor(Color.parseColor("#F59E0B"));
-                  badge.setTextSize(18f);
-                  badge.setTypeface(null, Typeface.BOLD);
-                  badge.setGravity(Gravity.CENTER);
-                  root.addView(badge);
+                  // App Identity Pill
+                  TextView appHeader = new TextView(this);
+                  appHeader.setText("🎓 CAMPUS EXPENSE LIVE");
+                  appHeader.setTextColor(Color.parseColor("#A855F7"));
+                  appHeader.setTextSize(14f);
+                  appHeader.setTypeface(null, Typeface.BOLD);
+                  appHeader.setGravity(Gravity.CENTER);
+                  appHeader.setPadding(0, 0, 0, 28);
+                  root.addView(appHeader);
 
+                  // Sender Name (Clear & Prominent)
+                  TextView senderName = new TextView(this);
+                  senderName.setText("AYAN KARMAKAR (অয়ন)");
+                  senderName.setTextColor(Color.parseColor("#F59E0B"));
+                  senderName.setTextSize(24f);
+                  senderName.setTypeface(null, Typeface.BOLD);
+                  senderName.setGravity(Gravity.CENTER);
+                  root.addView(senderName);
+
+                  TextView subLabel = new TextView(this);
+                  subLabel.setText("জরুরি মেসেজ পাঠিয়েছে");
+                  subLabel.setTextColor(Color.parseColor("#CBD5E1"));
+                  subLabel.setTextSize(16f);
+                  subLabel.setGravity(Gravity.CENTER);
+                  subLabel.setPadding(0, 10, 0, 50);
+                  root.addView(subLabel);
+
+                  // Message Card Box
                   TextView msgView = new TextView(this);
                   msgView.setText(msg);
                   msgView.setTextColor(Color.WHITE);
-                  msgView.setTextSize(26f);
+                  msgView.setTextSize(24f);
                   msgView.setTypeface(null, Typeface.BOLD);
                   msgView.setGravity(Gravity.CENTER);
-                  msgView.setPadding(24, 70, 24, 90);
+                  GradientDrawable cardBg = new GradientDrawable();
+                  cardBg.setColor(Color.parseColor("#18142B"));
+                  cardBg.setStroke(3, Color.parseColor("#F59E0B"));
+                  cardBg.setCornerRadius(32f);
+                  msgView.setBackground(cardBg);
+                  msgView.setPadding(44, 52, 44, 52);
+
+                  LinearLayout.LayoutParams msgParams = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  );
+                  msgParams.setMargins(0, 0, 0, 75);
+                  msgView.setLayoutParams(msgParams);
                   root.addView(msgView);
 
+                  // Big Stop Button
                   Button stopBtn = new Button(this);
                   stopBtn.setText("⏹  STOP ALARM");
                   stopBtn.setTextColor(Color.WHITE);
@@ -379,7 +412,7 @@ jobs:
                               if (!msgId.isEmpty() && !msgId.equals(lastMsgId)) {
                                   prefs.edit().putString("last_custom_msg_id", msgId).apply();
                                   if ("RING".equals(type)) {
-                                      String finalBody = msg.isEmpty() ? "Ayan sent an urgent note!" : msg;
+                                      String finalBody = msg.isEmpty() ? "জরুরি দরকার! একটু কথা আছে।" : msg;
                                       launchFullScreenRing(finalBody);
                                   } else if ("IDLE".equals(type)) {
                                       Intent stopIntent = new Intent("com.ayan.expenselive.STOP_ALARM");
@@ -451,7 +484,7 @@ jobs:
 
                   NotificationCompat.Builder builder = new NotificationCompat.Builder(this, FULLSCREEN_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_dialog_email)
-                      .setContentTitle("🔔 Message from Ayan")
+                      .setContentTitle("🔔 Ayan Karmakar (অয়ন)")
                       .setContentText(msg)
                       .setPriority(NotificationCompat.PRIORITY_MAX)
                       .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -612,7 +645,6 @@ jobs:
               }
 
               private void setupNextPermission() {
-                  // 1. Notification Permission
                   if (Build.VERSION.SDK_INT >= 33 && !askedNotif) {
                       if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                           askedNotif = true;
@@ -621,7 +653,6 @@ jobs:
                       }
                   }
 
-                  // 2. Display Over Other Apps (So Full-Screen Alert pops up over any screen)
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this) && !askedOverlay) {
                       askedOverlay = true;
                       Toast.makeText(this, "Enable 'Display over other apps' so Ring Alert opens full-screen", Toast.LENGTH_LONG).show();
@@ -632,7 +663,6 @@ jobs:
                       } catch (Exception ignored) {}
                   }
 
-                  // 3. Battery Optimization Bypass
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !askedBattery) {
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
@@ -646,7 +676,6 @@ jobs:
                       }
                   }
 
-                  // 4. Device Admin Uninstall Protection
                   if (!dpm.isAdminActive(adminComp) && !askedAdmin) {
                       askedAdmin = true;
                       Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
@@ -681,9 +710,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.1.${{ github.run_number }}
-          name: Campus Expense Live v3.1.${{ github.run_number }}
-          body: "Restored Device Admin uninstall protection + Full-Screen Ring Alert with big STOP ALARM button."
+          tag_name: v3.2.${{ github.run_number }}
+          name: Campus Expense Live v3.2.${{ github.run_number }}
+          body: "Added sender name (Ayan Karmakar) & app header on full-screen alert."
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
