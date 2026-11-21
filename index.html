@@ -312,7 +312,8 @@
     autoSyncWeekWithDate();
     try {
       const res = await fetch(API_URL);
-      rawData = await res.json();
+      const allRows = await res.json();
+      rawData = allRows.filter(r => r.date !== "__SYS_CMD__");
       const now = new Date();
       const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
       const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
