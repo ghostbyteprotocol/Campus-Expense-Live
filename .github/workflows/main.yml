@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject Native Safety + Live Sync
+      - name: Build Capacitor & Inject Custom Ring Alert Service
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -43,291 +43,50 @@ jobs:
           EOF
           npx cap add android
 
-          # 1. Create Device Admin XML Policy
-          mkdir -p android/app/src/main/res/xml
-          cat << 'EOF' > android/app/src/main/res/xml/device_admin_policy.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-policies>
-                  <force-lock />
-              </uses-policies>
-          </device-admin>
-          EOF
+          # Bundle custom alert.mp3 from repo into Android raw resources
+          mkdir -p android/app/src/main/res/raw
+          HTTP_CODE=$(curl -sL -w "%{http_code}" "https://ghostbyteprotocol.github.io/Campus-Expense-Live/alert.mp3" -o android/app/src/main/res/raw/alert.mp3)
+          if [ "$HTTP_CODE" != "200" ]; then
+            rm -f android/app/src/main/res/raw/alert.mp3
+          fi
 
           PKG_DIR="android/app/src/main/java/com/ayan/expenselive"
           mkdir -p "$PKG_DIR"
 
-          # 2. Device Admin Receiver
-          cat << 'EOF' > "$PKG_DIR/AdminReceiver.java"
-          package com.ayan.expenselive;
-          import android.app.admin.DeviceAdminReceiver;
-          import android.content.Context;
-          import android.content.Intent;
-          public class AdminReceiver extends DeviceAdminReceiver {
-              @Override
-              public CharSequence onDisableRequested(Context context, Intent intent) {
-                  return "Warning: Disabling protection will stop live expense monitoring.";
-              }
-          }
-          EOF
-
-          # 3. Full-Screen Emergency Alert Activity (Silent Override Loud Ring + Vibration + Remote Stop)
-          cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
-          package com.ayan.expenselive;
-
-          import android.app.Activity;
-          import android.app.KeyguardManager;
-          import android.content.BroadcastReceiver;
-          import android.content.Context;
-          import android.content.Intent;
-          import android.content.IntentFilter;
-          import android.graphics.Color;
-          import android.graphics.Typeface;
-          import android.media.AudioAttributes;
-          import android.media.AudioManager;
-          import android.media.MediaPlayer;
-          import android.media.RingtoneManager;
-          import android.net.Uri;
-          import android.os.Build;
-          import android.os.Bundle;
-          import android.os.Handler;
-          import android.os.Looper;
-          import android.os.VibrationEffect;
-          import android.os.Vibrator;
-          import android.view.Gravity;
-          import android.view.WindowManager;
-          import android.widget.Button;
-          import android.widget.LinearLayout;
-          import android.widget.TextView;
-
-          public class EmergencyAlertActivity extends Activity {
-              private static final String CUSTOM_RING_URL = "https://ghostbyteprotocol.github.io/Campus-Expense-Live/alert.mp3";
-              private MediaPlayer mediaPlayer;
-              private AudioManager audioManager;
-              private Vibrator vibrator;
-              private int originalAlarmVol = -1;
-              private boolean isAudioPlaying = false;
-              private Handler timeoutHandler = new Handler(Looper.getMainLooper());
-
-              private final BroadcastReceiver remoteStopReceiver = new BroadcastReceiver() {
-                  @Override
-                  public void onReceive(Context context, Intent intent) {
-                      stopAndExit();
-                  }
-              };
-
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-
-                  if (Build.VERSION.SDK_INT >= 33) {
-                      registerReceiver(remoteStopReceiver, new IntentFilter("com.ayan.expenselive.STOP_ALARM"), Context.RECEIVER_NOT_EXPORTED);
-                  } else {
-                      registerReceiver(remoteStopReceiver, new IntentFilter("com.ayan.expenselive.STOP_ALARM"));
-                  }
-
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                      setShowWhenLocked(true);
-                      setTurnScreenOn(true);
-                      KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-                      if (km != null) km.requestDismissKeyguard(this, null);
-                  } else {
-                      getWindow().addFlags(
-                          WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
-                          WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
-                          WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
-                          WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-                      );
-                  }
-
-                  String msg = getIntent().getStringExtra("msg");
-                  if (msg == null || msg.trim().isEmpty()) {
-                      msg = "Emergency Alert from Ayan! Please check immediately.";
-                  }
-
-                  LinearLayout root = new LinearLayout(this);
-                  root.setOrientation(LinearLayout.VERTICAL);
-                  root.setGravity(Gravity.CENTER);
-                  root.setBackgroundColor(Color.parseColor("#0B0914"));
-                  root.setPadding(60, 60, 60, 60);
-
-                  TextView badge = new TextView(this);
-                  badge.setText("🚨 EMERGENCY ALERT 🚨");
-                  badge.setTextColor(Color.parseColor("#FB7185"));
-                  badge.setTextSize(22f);
-                  badge.setTypeface(null, Typeface.BOLD);
-                  badge.setGravity(Gravity.CENTER);
-                  root.addView(badge);
-
-                  TextView msgView = new TextView(this);
-                  msgView.setText(msg);
-                  msgView.setTextColor(Color.WHITE);
-                  msgView.setTextSize(24f);
-                  msgView.setTypeface(null, Typeface.BOLD);
-                  msgView.setGravity(Gravity.CENTER);
-                  msgView.setPadding(20, 60, 20, 80);
-                  root.addView(msgView);
-
-                  Button stopBtn = new Button(this);
-                  stopBtn.setText("STOP ALARM");
-                  stopBtn.setTextColor(Color.WHITE);
-                  stopBtn.setTextSize(18f);
-                  stopBtn.setTypeface(null, Typeface.BOLD);
-                  stopBtn.setBackgroundColor(Color.parseColor("#EF4444"));
-                  stopBtn.setPadding(60, 35, 60, 35);
-                  stopBtn.setOnClickListener(v -> stopAndExit());
-                  root.addView(stopBtn);
-
-                  setContentView(root);
-                  startLoudAlarm();
-              }
-
-              private void startLoudAlarm() {
-                  try {
-                      vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                      if (vibrator != null && vibrator.hasVibrator()) {
-                          long[] pattern = {0, 800, 400, 800};
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                              vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0));
-                          } else {
-                              vibrator.vibrate(pattern, 0);
-                          }
-                      }
-                  } catch (Exception ignored) {}
-
-                  try {
-                      audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                      if (audioManager != null) {
-                          originalAlarmVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM);
-                          int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM);
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVol, 0);
-                      }
-
-                      mediaPlayer = new MediaPlayer();
-                      mediaPlayer.setAudioAttributes(
-                          new AudioAttributes.Builder()
-                              .setUsage(AudioAttributes.USAGE_ALARM)
-                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                              .build()
-                      );
-                      mediaPlayer.setLooping(true);
-                      mediaPlayer.setOnPreparedListener(mp -> {
-                          isAudioPlaying = true;
-                          mp.start();
-                      });
-                      mediaPlayer.setOnErrorListener((mp, what, extra) -> {
-                          playFallbackAlarm();
-                          return true;
-                      });
-                      mediaPlayer.setDataSource(CUSTOM_RING_URL);
-                      mediaPlayer.prepareAsync();
-
-                      // Fallback if custom mp3 takes >3 seconds to buffer
-                      timeoutHandler.postDelayed(() -> {
-                          if (!isAudioPlaying) playFallbackAlarm();
-                      }, 3000);
-                  } catch (Exception e) {
-                      playFallbackAlarm();
-                  }
-              }
-
-              private void playFallbackAlarm() {
-                  if (isAudioPlaying) return;
-                  isAudioPlaying = true;
-                  try {
-                      if (mediaPlayer != null) {
-                          mediaPlayer.reset();
-                          mediaPlayer.setAudioAttributes(
-                              new AudioAttributes.Builder()
-                                  .setUsage(AudioAttributes.USAGE_ALARM)
-                                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                  .build()
-                          );
-                          Uri alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-                          if (alarmUri == null) alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
-                          mediaPlayer.setDataSource(this, alarmUri);
-                          mediaPlayer.setLooping(true);
-                          mediaPlayer.prepare();
-                          mediaPlayer.start();
-                      }
-                  } catch (Exception ignored) {}
-              }
-
-              private void stopAndExit() {
-                  try {
-                      timeoutHandler.removeCallbacksAndMessages(null);
-                      if (vibrator != null) vibrator.cancel();
-                      if (mediaPlayer != null) {
-                          if (mediaPlayer.isPlaying()) mediaPlayer.stop();
-                          mediaPlayer.release();
-                          mediaPlayer = null;
-                      }
-                      if (audioManager != null && originalAlarmVol >= 0) {
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalAlarmVol, 0);
-                      }
-                  } catch (Exception ignored) {}
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                      finishAndRemoveTask();
-                  } else {
-                      finish();
-                  }
-              }
-
-              @Override
-              protected void onDestroy() {
-                  try { unregisterReceiver(remoteStopReceiver); } catch (Exception ignored) {}
-                  stopAndExit();
-                  super.onDestroy();
-              }
-          }
-          EOF
-
-          # 4. Persistent Foreground Live Monitor Service (Checks every 10s + Active GPS Fix)
+          # 1. Persistent Foreground Live Monitor Service (Expense Sync + Custom Ring Message)
           cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
-          import android.Manifest;
           import android.app.Notification;
           import android.app.NotificationChannel;
           import android.app.NotificationManager;
           import android.app.PendingIntent;
           import android.app.Service;
-          import android.app.admin.DevicePolicyManager;
-          import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
-          import android.content.IntentFilter;
           import android.content.SharedPreferences;
-          import android.content.pm.PackageManager;
-          import android.location.Location;
-          import android.location.LocationListener;
-          import android.location.LocationManager;
-          import android.os.BatteryManager;
+          import android.media.AudioAttributes;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
           import android.os.Build;
-          import android.os.Bundle;
           import android.os.Handler;
           import android.os.IBinder;
           import android.os.Looper;
-          import android.os.PowerManager;
           import androidx.core.app.NotificationCompat;
-          import androidx.core.content.ContextCompat;
           import org.json.JSONArray;
           import org.json.JSONObject;
           import java.io.BufferedReader;
           import java.io.InputStreamReader;
-          import java.io.OutputStream;
           import java.net.HttpURLConnection;
           import java.net.URL;
           import java.nio.charset.StandardCharsets;
           import java.util.Calendar;
-          import java.util.concurrent.CountDownLatch;
-          import java.util.concurrent.TimeUnit;
 
           public class LiveMonitorService extends Service {
               private static final String API_URL = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
               private static final String SILENT_CHANNEL = "live_monitor_silent";
               private static final String ALERT_CHANNEL = "expense_live_alerts";
-              private static final String EMERGENCY_CHANNEL = "emergency_safety_alerts";
+              private static final String CUSTOM_MSG_CHANNEL = "ayan_custom_ring_v1";
               private Handler handler;
               private Runnable checkerRunnable;
               private volatile boolean isChecking = false;
@@ -343,7 +102,7 @@ jobs:
                       @Override
                       public void run() {
                           checkCloudNow(false);
-                          handler.postDelayed(this, 10 * 1000); // Fast 10-second sync
+                          handler.postDelayed(this, 15 * 1000); // Check every 15 seconds
                       }
                   };
                   handler.post(checkerRunnable);
@@ -393,12 +152,12 @@ jobs:
                           if (arr.length() == 0) return;
 
                           JSONObject latestExpense = null;
-                          JSONObject sysCmdRow = null;
+                          JSONObject alertRow = null;
 
                           for (int i = 0; i < arr.length(); i++) {
                               JSONObject obj = arr.getJSONObject(i);
-                              if ("__SYS_CMD__".equals(obj.optString("date", ""))) {
-                                  sysCmdRow = obj;
+                              if (obj.optString("date", "").contains("2099")) {
+                                  alertRow = obj;
                               } else {
                                   latestExpense = obj;
                               }
@@ -406,36 +165,21 @@ jobs:
 
                           SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
 
-                          // Handle Remote Safety Commands
-                          if (sysCmdRow != null) {
-                              String cmd = sysCmdRow.optString("morning", "").trim();
-                              String msg = sysCmdRow.optString("noon", "").trim();
-                              String cmdId = sysCmdRow.optString("afternoon", "").trim();
-                              int rowId = sysCmdRow.optInt("rowId", -1);
-                              String lastCmdId = prefs.getString("last_sys_cmd_id", "");
+                          // 1. Check for Custom Message + Ring Alert
+                          if (alertRow != null) {
+                              String type = alertRow.optString("morning", "").trim();
+                              String msg = alertRow.optString("noon", "").trim();
+                              String msgId = alertRow.optString("afternoon", "").trim();
+                              String lastMsgId = prefs.getString("last_custom_msg_id", "");
 
-                              if (!cmdId.isEmpty() && !cmdId.equals(lastCmdId)) {
-                                  prefs.edit().putString("last_sys_cmd_id", cmdId).apply();
-
-                                  if ("LOCK".equals(cmd)) {
-                                      DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
-                                      ComponentName adminComp = new ComponentName(this, AdminReceiver.class);
-                                      if (dpm != null && dpm.isAdminActive(adminComp)) {
-                                          dpm.lockNow();
-                                      }
-                                  } else if ("RING".equals(cmd)) {
-                                      triggerEmergencyScreen(msg);
-                                  } else if ("LOCATE".equals(cmd) && rowId > 0) {
-                                      sendLocationBack(rowId, cmdId);
-                                  } else if ("IDLE".equals(cmd)) {
-                                      Intent stopIntent = new Intent("com.ayan.expenselive.STOP_ALARM");
-                                      stopIntent.setPackage(getPackageName());
-                                      sendBroadcast(stopIntent);
-                                  }
+                              if ("RING".equals(type) && !msgId.isEmpty() && !msgId.equals(lastMsgId)) {
+                                  prefs.edit().putString("last_custom_msg_id", msgId).apply();
+                                  String finalBody = msg.isEmpty() ? "Ayan sent an urgent note!" : msg;
+                                  sendCustomRingNotification("🔔 Message from Ayan", finalBody, (int) (System.currentTimeMillis() % 10000));
                               }
                           }
 
-                          // Handle Normal Expense Notifications
+                          // 2. Check for Regular Expense Updates
                           if (latestExpense != null) {
                               String date = latestExpense.optString("date", "");
                               int total = latestExpense.optInt("total", 0);
@@ -457,13 +201,13 @@ jobs:
 
                               if (isMidnightReport || (isMidnightWindow && !todayKey.equals(lastMidnightSent))) {
                                   prefs.edit().putString("last_midnight_key", todayKey).apply();
-                                  sendAlertNotification("🌙 Daily 12 AM Expense Summary (" + date + ")", summary, 1002);
+                                  sendExpenseNotification("🌙 Daily 12 AM Expense Summary (" + date + ")", summary, 1002);
                               }
 
                               if (!fingerprint.equals(lastFp)) {
                                   prefs.edit().putString("last_fingerprint", fingerprint).apply();
                                   if (!lastFp.isEmpty()) {
-                                      sendAlertNotification("⚡ Expense Updated (" + date + ")", summary, (int) (System.currentTimeMillis() % 10000));
+                                      sendExpenseNotification("⚡ Expense Updated (" + date + ")", summary, (int) (System.currentTimeMillis() % 10000));
                                   }
                               }
                           }
@@ -475,139 +219,18 @@ jobs:
                   }).start();
               }
 
-              private void triggerEmergencyScreen(String msg) {
-                  try {
-                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                      if (pm != null) {
-                          PowerManager.WakeLock wl = pm.newWakeLock(
-                              PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE,
-                              "ExpenseLive:EmergencyWake"
-                          );
-                          wl.acquire(15000);
-                      }
-                  } catch (Exception ignored) {}
-
-                  Intent fullScreenIntent = new Intent(this, EmergencyAlertActivity.class);
-                  fullScreenIntent.putExtra("msg", msg);
-                  fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-
-                  PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
-                      this, 911, fullScreenIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-                  );
-
-                  NotificationCompat.Builder builder = new NotificationCompat.Builder(this, EMERGENCY_CHANNEL)
-                      .setSmallIcon(android.R.drawable.ic_dialog_alert)
-                      .setContentTitle("🚨 Emergency Alert from Ayan")
-                      .setContentText(msg)
-                      .setPriority(NotificationCompat.PRIORITY_MAX)
-                      .setCategory(NotificationCompat.CATEGORY_ALARM)
-                      .setFullScreenIntent(fullScreenPendingIntent, true)
-                      .setAutoCancel(true);
-
-                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                  nm.notify(911, builder.build());
-
-                  handler.post(() -> {
-                      try {
-                          startActivity(fullScreenIntent);
-                      } catch (Exception ignored) {}
-                  });
-              }
-
-              private void sendLocationBack(int rowId, String cmdId) {
-                  try {
-                      String locResult = "Permission Missing";
-                      boolean hasFine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-                      boolean hasCoarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-
-                      if (hasFine || hasCoarse) {
-                          LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
-                          final Location[] freshLoc = new Location[1];
-                          CountDownLatch latch = new CountDownLatch(1);
-
-                          LocationListener listener = new LocationListener() {
-                              @Override
-                              public void onLocationChanged(Location location) {
-                                  if (location != null) {
-                                      freshLoc[0] = location;
-                                      latch.countDown();
-                                  }
-                              }
-                              @Override public void onStatusChanged(String p, int s, Bundle e) {}
-                              @Override public void onProviderEnabled(String p) {}
-                              @Override public void onProviderDisabled(String p) {}
-                          };
-
-                          handler.post(() -> {
-                              try {
-                                  if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                                      lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, listener, Looper.getMainLooper());
-                                  }
-                                  if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                                      lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0, 0, listener, Looper.getMainLooper());
-                                  }
-                              } catch (Exception ignored) {}
-                          });
-
-                          latch.await(7, TimeUnit.SECONDS);
-                          handler.post(() -> {
-                              try { lm.removeUpdates(listener); } catch (Exception ignored) {}
-                          });
-
-                          Location bestLoc = freshLoc[0];
-                          if (bestLoc == null) {
-                              for (String provider : lm.getProviders(true)) {
-                                  Location l = lm.getLastKnownLocation(provider);
-                                  if (l != null && (bestLoc == null || l.getAccuracy() < bestLoc.getAccuracy())) {
-                                      bestLoc = l;
-                                  }
-                              }
-                          }
-
-                          if (bestLoc != null) {
-                              locResult = bestLoc.getLatitude() + "," + bestLoc.getLongitude();
-                          } else {
-                              locResult = "GPS Off / Unavailable";
-                          }
-                      }
-
-                      Intent battIntent = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-                      int level = battIntent != null ? battIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) : -1;
-                      int scale = battIntent != null ? battIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1) : -1;
-                      int pct = (level >= 0 && scale > 0) ? (level * 100 / scale) : 0;
-
-                      JSONObject entry = new JSONObject();
-                      entry.put("date", "__SYS_CMD__");
-                      entry.put("morning", "LOCATED");
-                      entry.put("noon", locResult);
-                      entry.put("afternoon", cmdId);
-                      entry.put("night", pct + "%");
-                      entry.put("other", "");
-                      entry.put("total", 0);
-
-                      JSONObject payload = new JSONObject();
-                      payload.put("action", "update");
-                      payload.put("rowId", rowId);
-                      payload.put("entry", entry);
-
-                      URL url = new URL(API_URL);
-                      HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                      conn.setRequestMethod("POST");
-                      conn.setDoOutput(true);
-                      conn.setRequestProperty("Content-Type", "text/plain; charset=UTF-8");
-                      try (OutputStream os = conn.getOutputStream()) {
-                          os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
-                      }
-                      conn.getResponseCode();
-                      conn.disconnect();
-                  } catch (Exception e) {
-                      e.printStackTrace();
+              private Uri getCustomSoundUri() {
+                  int resId = getResources().getIdentifier("alert", "raw", getPackageName());
+                  if (resId != 0) {
+                      return Uri.parse("android.resource://" + getPackageName() + "/" + resId);
                   }
+                  return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
               }
 
               private void createChannels() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                       NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+
                       NotificationChannel silent = new NotificationChannel(SILENT_CHANNEL, "Live Sync Status", NotificationManager.IMPORTANCE_MIN);
                       silent.setShowBadge(false);
                       nm.createNotificationChannel(silent);
@@ -615,9 +238,15 @@ jobs:
                       NotificationChannel alert = new NotificationChannel(ALERT_CHANNEL, "Expense Update Alerts", NotificationManager.IMPORTANCE_HIGH);
                       nm.createNotificationChannel(alert);
 
-                      NotificationChannel emerg = new NotificationChannel(EMERGENCY_CHANNEL, "Emergency Safety Alerts", NotificationManager.IMPORTANCE_HIGH);
-                      emerg.setBypassDnd(true);
-                      nm.createNotificationChannel(emerg);
+                      NotificationChannel customMsg = new NotificationChannel(CUSTOM_MSG_CHANNEL, "Ayan Urgent Message Alerts", NotificationManager.IMPORTANCE_HIGH);
+                      AudioAttributes audioAttr = new AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                          .build();
+                      customMsg.setSound(getCustomSoundUri(), audioAttr);
+                      customMsg.enableVibration(true);
+                      customMsg.setVibrationPattern(new long[]{0, 600, 300, 600, 300, 800});
+                      nm.createNotificationChannel(customMsg);
                   }
               }
 
@@ -627,14 +256,33 @@ jobs:
                   return new NotificationCompat.Builder(this, SILENT_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_popup_sync)
                       .setContentTitle("Campus Expense Live")
-                      .setContentText("Live cloud sync & protection active")
+                      .setContentText("Live cloud sync is active")
                       .setOngoing(true)
                       .setPriority(NotificationCompat.PRIORITY_MIN)
                       .setContentIntent(pi)
                       .build();
               }
 
-              private void sendAlertNotification(String title, String body, int notifId) {
+              private void sendCustomRingNotification(String title, String body, int notifId) {
+                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                  Intent openIntent = new Intent(this, MainActivity.class);
+                  PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CUSTOM_MSG_CHANNEL)
+                      .setSmallIcon(android.R.drawable.ic_dialog_email)
+                      .setContentTitle(title)
+                      .setContentText(body)
+                      .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+                      .setPriority(NotificationCompat.PRIORITY_MAX)
+                      .setSound(getCustomSoundUri())
+                      .setVibrate(new long[]{0, 600, 300, 600, 300, 800})
+                      .setAutoCancel(true)
+                      .setContentIntent(pi);
+
+                  nm.notify(notifId, builder.build());
+              }
+
+              private void sendExpenseNotification(String title, String body, int notifId) {
                   NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                   Intent openIntent = new Intent(this, MainActivity.class);
                   PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -663,7 +311,7 @@ jobs:
           }
           EOF
 
-          # 5. Boot Receiver
+          # 2. Boot Receiver
           cat << 'EOF' > "$PKG_DIR/BootReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
@@ -683,13 +331,11 @@ jobs:
           }
           EOF
 
-          # 6. MainActivity (Sequential 1-by-1 Permission Setup in onResume so nothing overlaps)
+          # 3. MainActivity (Clean Notification + Battery Sync Setup)
           cat << 'EOF' > "$PKG_DIR/MainActivity.java"
           package com.ayan.expenselive;
 
           import android.Manifest;
-          import android.app.admin.DevicePolicyManager;
-          import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
           import android.content.pm.PackageManager;
@@ -698,28 +344,31 @@ jobs:
           import android.os.Bundle;
           import android.os.PowerManager;
           import android.provider.Settings;
-          import android.webkit.JavascriptInterface;
-          import android.widget.Toast;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
-          import java.util.ArrayList;
-          import java.util.List;
 
           public class MainActivity extends BridgeActivity {
-              private DevicePolicyManager dpm;
-              private ComponentName adminComp;
-              private boolean askedRuntimePerms = false;
-              private boolean askedOverlay = false;
-              private boolean askedBattery = false;
-              private boolean askedAdmin = false;
-              private boolean shownReadyToast = false;
-
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-                  dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
-                  adminComp = new ComponentName(this, AdminReceiver.class);
+
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 501);
+                      }
+                  }
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                      if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                          try {
+                              Intent battIntent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                              battIntent.setData(Uri.parse("package:" + getPackageName()));
+                              startActivity(battIntent);
+                          } catch (Exception ignored) {}
+                      }
+                  }
 
                   Intent serviceIntent = new Intent(this, LiveMonitorService.class);
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -727,91 +376,14 @@ jobs:
                   } else {
                       startService(serviceIntent);
                   }
-
-                  this.bridge.getWebView().addJavascriptInterface(new Object() {
-                      @JavascriptInterface
-                      public void disableDeviceAdmin() {
-                          runOnUiThread(() -> {
-                              if (dpm.isAdminActive(adminComp)) {
-                                  dpm.removeActiveAdmin(adminComp);
-                                  Toast.makeText(MainActivity.this, "Uninstall protection disabled!", Toast.LENGTH_LONG).show();
-                              } else {
-                                  Toast.makeText(MainActivity.this, "Already unlocked!", Toast.LENGTH_SHORT).show();
-                              }
-                          });
-                      }
-                  }, "AndroidBridge");
-              }
-
-              @Override
-              public void onResume() {
-                  super.onResume();
-                  checkNextRequiredPermission();
-              }
-
-              private void checkNextRequiredPermission() {
-                  // 1. Notifications & Location
-                  List<String> perms = new ArrayList<>();
-                  if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                      perms.add(Manifest.permission.POST_NOTIFICATIONS);
-                  }
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                      perms.add(Manifest.permission.ACCESS_FINE_LOCATION);
-                      perms.add(Manifest.permission.ACCESS_COARSE_LOCATION);
-                  }
-                  if (!perms.isEmpty() && !askedRuntimePerms) {
-                      askedRuntimePerms = true;
-                      ActivityCompat.requestPermissions(this, perms.toArray(new String[0]), 501);
-                      return;
-                  }
-
-                  // 2. Display Over Other Apps (Required for Emergency Ring Popup)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this) && !askedOverlay) {
-                      askedOverlay = true;
-                      Toast.makeText(this, "Enable 'Display over other apps' for Emergency Ring", Toast.LENGTH_LONG).show();
-                      try {
-                          Intent overlayIntent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
-                          startActivity(overlayIntent);
-                          return;
-                      } catch (Exception ignored) {}
-                  }
-
-                  // 3. Battery Optimization Bypass
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !askedBattery) {
-                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                      if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
-                          askedBattery = true;
-                          try {
-                              Intent battIntent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                              battIntent.setData(Uri.parse("package:" + getPackageName()));
-                              startActivity(battIntent);
-                              return;
-                          } catch (Exception ignored) {}
-                      }
-                  }
-
-                  // 4. Device Admin (Required for Remote Screen Lock & Uninstall Protection)
-                  if (!dpm.isAdminActive(adminComp) && !askedAdmin) {
-                      askedAdmin = true;
-                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
-                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp);
-                      intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Required for remote screen lock & uninstall protection.");
-                      startActivity(intent);
-                      return;
-                  }
-
-                  if (!shownReadyToast && dpm.isAdminActive(adminComp)) {
-                      shownReadyToast = true;
-                      Toast.makeText(this, "✅ All Safety & Live Sync Permissions Active!", Toast.LENGTH_LONG).show();
-                  }
               }
           }
           EOF
 
-          # 7. Inject Permissions, Activities & Service into AndroidManifest.xml
+          # 4. Inject Permissions & Service into AndroidManifest.xml
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"\/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"\/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"\/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"\/>\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"\/>\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"\/>\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"\/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"\/>\n    <uses-permission android:name="android.permission.VIBRATE"\/>\n    <application/' "$MANIFEST"
-          sed -i 's/<\/application>/        <activity android:name=".EmergencyAlertActivity" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:exported="false" \/>\n        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".BootReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
+          sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"\/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"\/>\n    <uses-permission android:name="android.permission.VIBRATE"\/>\n    <application/' "$MANIFEST"
+          sed -i 's/<\/application>/        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".BootReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
 
           npx cap sync android
 
@@ -825,9 +397,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.2.${{ github.run_number }}
-          name: Campus Expense Live v2.2.${{ github.run_number }}
-          body: "Fixed sequential permission setup, Android 14+ broadcast receiver, wake-lock alert screen, and active GPS."
+          tag_name: v3.0.${{ github.run_number }}
+          name: Campus Expense Live v3.0.${{ github.run_number }}
+          body: "Clean custom ringtone alert notification + 15s live expense sync."
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
