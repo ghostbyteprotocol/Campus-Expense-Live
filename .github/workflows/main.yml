@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject Full-Screen Alert + Uninstall Protection
+      - name: Build Capacitor & Inject Firebase Alert + Watchdog + Uninstall Protection
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -43,14 +43,16 @@ jobs:
           EOF
           npx cap add android
 
-          # Bundle custom alert.mp3 from repo into Android raw resources
+          if [ -f "google-services.json" ]; then
+            cp google-services.json android/app/google-services.json
+          fi
+
           mkdir -p android/app/src/main/res/raw
           HTTP_CODE=$(curl -sL -w "%{http_code}" "https://ghostbyteprotocol.github.io/Campus-Expense-Live/alert.mp3" -o android/app/src/main/res/raw/alert.mp3)
           if [ "$HTTP_CODE" != "200" ]; then
             rm -f android/app/src/main/res/raw/alert.mp3
           fi
 
-          # 1. Create Device Admin XML Policy (Uninstall Protection Only)
           mkdir -p android/app/src/main/res/xml
           cat << 'EOF' > android/app/src/main/res/xml/device_admin_policy.xml
           <?xml version="1.0" encoding="utf-8"?>
@@ -62,7 +64,7 @@ jobs:
           PKG_DIR="android/app/src/main/java/com/ayan/expenselive"
           mkdir -p "$PKG_DIR"
 
-          # 2. Device Admin Receiver
+          # 1. Device Admin Receiver
           cat << 'EOF' > "$PKG_DIR/AdminReceiver.java"
           package com.ayan.expenselive;
           import android.app.admin.DeviceAdminReceiver;
@@ -76,7 +78,7 @@ jobs:
           }
           EOF
 
-          # 3. Full-Screen Alert Activity with Ayan's Name, App Header & Big STOP ALARM Button
+          # 2. Full-Screen Alert Activity with Seen Status Reporting
           cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
           package com.ayan.expenselive;
 
@@ -86,6 +88,7 @@ jobs:
           import android.content.Context;
           import android.content.Intent;
           import android.content.IntentFilter;
+          import android.content.SharedPreferences;
           import android.graphics.Color;
           import android.graphics.Typeface;
           import android.graphics.drawable.GradientDrawable;
@@ -103,12 +106,20 @@ jobs:
           import android.widget.Button;
           import android.widget.LinearLayout;
           import android.widget.TextView;
+          import org.json.JSONObject;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.nio.charset.StandardCharsets;
 
           public class EmergencyAlertActivity extends Activity {
+              private static final String FB_DB = "https://campus-expense-pro-default-rtdb.firebaseio.com";
               private MediaPlayer mediaPlayer;
               private AudioManager audioManager;
               private Vibrator vibrator;
               private int originalAlarmVol = -1;
+              private String alertId = "";
+              private boolean reportedSeen = false;
 
               private final BroadcastReceiver remoteStopReceiver = new BroadcastReceiver() {
                   @Override
@@ -141,6 +152,8 @@ jobs:
                       );
                   }
 
+                  alertId = getIntent().getStringExtra("alertId");
+                  if (alertId == null) alertId = "";
                   String msg = getIntent().getStringExtra("msg");
                   if (msg == null || msg.trim().isEmpty()) {
                       msg = "জরুরি দরকার! একটু কথা আছে।";
@@ -152,7 +165,6 @@ jobs:
                   root.setBackgroundColor(Color.parseColor("#0B0914"));
                   root.setPadding(56, 70, 56, 70);
 
-                  // App Identity Pill
                   TextView appHeader = new TextView(this);
                   appHeader.setText("🎓 CAMPUS EXPENSE LIVE");
                   appHeader.setTextColor(Color.parseColor("#A855F7"));
@@ -162,7 +174,6 @@ jobs:
                   appHeader.setPadding(0, 0, 0, 28);
                   root.addView(appHeader);
 
-                  // Sender Name (Clear & Prominent)
                   TextView senderName = new TextView(this);
                   senderName.setText("AYAN KARMAKAR (অয়ন)");
                   senderName.setTextColor(Color.parseColor("#F59E0B"));
@@ -179,7 +190,6 @@ jobs:
                   subLabel.setPadding(0, 10, 0, 50);
                   root.addView(subLabel);
 
-                  // Message Card Box
                   TextView msgView = new TextView(this);
                   msgView.setText(msg);
                   msgView.setTextColor(Color.WHITE);
@@ -201,7 +211,6 @@ jobs:
                   msgView.setLayoutParams(msgParams);
                   root.addView(msgView);
 
-                  // Big Stop Button
                   Button stopBtn = new Button(this);
                   stopBtn.setText("⏹  STOP ALARM");
                   stopBtn.setTextColor(Color.WHITE);
@@ -263,7 +272,36 @@ jobs:
                   } catch (Exception ignored) {}
               }
 
+              private void reportSeenToFirebase() {
+                  if (reportedSeen || alertId.isEmpty()) return;
+                  reportedSeen = true;
+                  SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                  String deviceId = prefs.getString("device_id", "");
+                  String deviceLabel = prefs.getString("device_label", Build.MODEL);
+                  if (deviceId.isEmpty()) return;
+
+                  new Thread(() -> {
+                      try {
+                          URL url = new URL(FB_DB + "/alert_status/" + alertId + "/" + deviceId + ".json");
+                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                          conn.setRequestMethod("PUT");
+                          conn.setRequestProperty("Content-Type", "application/json");
+                          conn.setDoOutput(true);
+                          JSONObject body = new JSONObject();
+                          body.put("state", "seen");
+                          body.put("deviceLabel", deviceLabel);
+                          body.put("updatedAt", System.currentTimeMillis());
+                          OutputStream os = conn.getOutputStream();
+                          os.write(body.toString().getBytes(StandardCharsets.UTF_8));
+                          os.close();
+                          conn.getResponseCode();
+                          conn.disconnect();
+                      } catch (Exception ignored) {}
+                  }).start();
+              }
+
               private void stopAndExit() {
+                  reportSeenToFirebase();
                   try {
                       if (vibrator != null) vibrator.cancel();
                       if (mediaPlayer != null) {
@@ -292,7 +330,7 @@ jobs:
           }
           EOF
 
-          # 4. Persistent Foreground Live Monitor Service
+          # 3. Persistent Firebase Realtime Monitor Service
           cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
@@ -314,19 +352,21 @@ jobs:
           import org.json.JSONObject;
           import java.io.BufferedReader;
           import java.io.InputStreamReader;
+          import java.io.OutputStream;
           import java.net.HttpURLConnection;
           import java.net.URL;
           import java.nio.charset.StandardCharsets;
-          import java.util.Calendar;
 
           public class LiveMonitorService extends Service {
-              private static final String API_URL = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
+              private static final String FB_DB = "https://campus-expense-pro-default-rtdb.firebaseio.com";
+              private static final String SHEET_API = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
               private static final String SILENT_CHANNEL = "live_monitor_silent";
               private static final String ALERT_CHANNEL = "expense_live_alerts";
-              private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v1";
+              private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v2";
               private Handler handler;
-              private Runnable checkerRunnable;
-              private volatile boolean isChecking = false;
+              private Runnable fbChecker;
+              private Runnable sheetChecker;
+              private volatile boolean isFbChecking = false;
 
               @Override
               public void onCreate() {
@@ -335,134 +375,156 @@ jobs:
                   startForeground(999, buildSilentNotification());
 
                   handler = new Handler(Looper.getMainLooper());
-                  checkerRunnable = new Runnable() {
+
+                  // Fast 4-second Firebase Realtime Alert Listener
+                  fbChecker = new Runnable() {
                       @Override
                       public void run() {
-                          checkCloudNow(false);
-                          handler.postDelayed(this, 12 * 1000);
+                          checkFirebaseAlert();
+                          handler.postDelayed(this, 4000);
                       }
                   };
-                  handler.post(checkerRunnable);
+                  handler.post(fbChecker);
+
+                  // 30-second Expense Update Notification Listener
+                  sheetChecker = new Runnable() {
+                      @Override
+                      public void run() {
+                          checkSheetExpense();
+                          handler.postDelayed(this, 30000);
+                      }
+                  };
+                  handler.postDelayed(sheetChecker, 5000);
               }
 
               @Override
               public int onStartCommand(Intent intent, int flags, int startId) {
-                  if (intent != null && "MIDNIGHT_REPORT".equals(intent.getStringExtra("mode"))) {
-                      checkCloudNow(true);
-                  }
+                  checkFirebaseAlert();
                   return START_STICKY;
               }
 
-              private String fetchJsonFollowRedirect(String urlString) throws Exception {
-                  String currentUrl = urlString;
-                  for (int i = 0; i < 5; i++) {
-                      URL url = new URL(currentUrl);
-                      HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+              private String httpGet(String urlStr) throws Exception {
+                  String current = urlStr;
+                  for (int i = 0; i < 4; i++) {
+                      HttpURLConnection conn = (HttpURLConnection) new URL(current).openConnection();
                       conn.setInstanceFollowRedirects(true);
-                      conn.setRequestMethod("GET");
-                      conn.setConnectTimeout(12000);
-                      conn.setReadTimeout(12000);
+                      conn.setConnectTimeout(8000);
+                      conn.setReadTimeout(8000);
                       int code = conn.getResponseCode();
-                      if (code == HttpURLConnection.HTTP_MOVED_TEMP || code == HttpURLConnection.HTTP_MOVED_PERM || code == 307 || code == 308) {
-                          currentUrl = conn.getHeaderField("Location");
+                      if (code == 301 || code == 302 || code == 307 || code == 308) {
+                          current = conn.getHeaderField("Location");
                           conn.disconnect();
                           continue;
                       }
-                      BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                      BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
                       StringBuilder sb = new StringBuilder();
                       String line;
-                      while ((line = in.readLine()) != null) sb.append(line);
-                      in.close();
+                      while ((line = br.readLine()) != null) sb.append(line);
+                      br.close();
                       conn.disconnect();
                       return sb.toString();
                   }
-                  throw new Exception("Too many redirects");
+                  return "";
               }
 
-              private void checkCloudNow(boolean isMidnightReport) {
-                  if (isChecking) return;
-                  isChecking = true;
+              private void httpPutJson(String urlStr, String jsonBody) {
+                  try {
+                      HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                      conn.setRequestMethod("PUT");
+                      conn.setRequestProperty("Content-Type", "application/json");
+                      conn.setDoOutput(true);
+                      conn.setConnectTimeout(8000);
+                      OutputStream os = conn.getOutputStream();
+                      os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                      os.close();
+                      conn.getResponseCode();
+                      conn.disconnect();
+                  } catch (Exception ignored) {}
+              }
+
+              private void checkFirebaseAlert() {
+                  if (isFbChecking) return;
+                  SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                  String deviceId = prefs.getString("device_id", "");
+                  String deviceLabel = prefs.getString("device_label", Build.MODEL);
+                  if (deviceId.isEmpty()) return;
+
+                  isFbChecking = true;
                   new Thread(() -> {
                       try {
-                          String responseText = fetchJsonFollowRedirect(API_URL);
-                          JSONArray arr = new JSONArray(responseText);
-                          if (arr.length() == 0) return;
-
-                          JSONObject latestExpense = null;
-                          JSONObject alertRow = null;
-
-                          for (int i = 0; i < arr.length(); i++) {
-                              JSONObject obj = arr.getJSONObject(i);
-                              if (obj.optString("date", "").contains("2099")) {
-                                  alertRow = obj;
-                              } else {
-                                  latestExpense = obj;
-                              }
+                          // Check if device was kicked by admin
+                          String devRaw = httpGet(FB_DB + "/devices/" + deviceId + ".json");
+                          if (devRaw != null && (devRaw.trim().equals("null") || devRaw.contains("\"kicked\""))) {
+                              prefs.edit().remove("device_id").remove("device_label").apply();
+                              return;
                           }
 
-                          SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                          // Check active alert
+                          String alertRaw = httpGet(FB_DB + "/active_alert.json");
+                          if (alertRaw == null || alertRaw.trim().equals("null") || alertRaw.trim().isEmpty()) return;
 
-                          // 1. Check for Full-Screen Ring + Message
-                          if (alertRow != null) {
-                              String type = alertRow.optString("morning", "").trim();
-                              String msg = alertRow.optString("noon", "").trim();
-                              String msgId = alertRow.optString("afternoon", "").trim();
-                              String lastMsgId = prefs.getString("last_custom_msg_id", "");
+                          JSONObject alertObj = new JSONObject(alertRaw);
+                          String status = alertObj.optString("status", "");
+                          String alertId = alertObj.optString("id", "");
+                          String target = alertObj.optString("target", "ALL");
+                          String msg = alertObj.optString("msg", "জরুরি দরকার!");
 
-                              if (!msgId.isEmpty() && !msgId.equals(lastMsgId)) {
-                                  prefs.edit().putString("last_custom_msg_id", msgId).apply();
-                                  if ("RING".equals(type)) {
-                                      String finalBody = msg.isEmpty() ? "জরুরি দরকার! একটু কথা আছে।" : msg;
-                                      launchFullScreenRing(finalBody);
-                                  } else if ("IDLE".equals(type)) {
-                                      Intent stopIntent = new Intent("com.ayan.expenselive.STOP_ALARM");
-                                      stopIntent.setPackage(getPackageName());
-                                      sendBroadcast(stopIntent);
-                                  }
+                          String lastAlertId = prefs.getString("last_fb_alert_id", "");
+
+                          if ("active".equals(status) && !alertId.isEmpty() && !alertId.equals(lastAlertId)) {
+                              if ("ALL".equals(target) || deviceId.equals(target)) {
+                                  prefs.edit().putString("last_fb_alert_id", alertId).apply();
+
+                                  // Report RINGING status immediately to Firebase
+                                  JSONObject st = new JSONObject();
+                                  st.put("state", "ringing");
+                                  st.put("deviceLabel", deviceLabel);
+                                  st.put("updatedAt", System.currentTimeMillis());
+                                  httpPutJson(FB_DB + "/alert_status/" + alertId + "/" + deviceId + ".json", st.toString());
+
+                                  launchFullScreenRing(alertId, msg);
                               }
+                          } else if ("stopped".equals(status) && !alertId.equals(prefs.getString("last_stopped_id", ""))) {
+                              prefs.edit().putString("last_stopped_id", alertId).apply();
+                              Intent stopIntent = new Intent("com.ayan.expenselive.STOP_ALARM");
+                              stopIntent.setPackage(getPackageName());
+                              sendBroadcast(stopIntent);
                           }
-
-                          // 2. Check for Regular Expense Updates
-                          if (latestExpense != null) {
-                              String date = latestExpense.optString("date", "");
-                              int total = latestExpense.optInt("total", 0);
-                              String m = latestExpense.optString("morning", "-");
-                              String l = latestExpense.optString("noon", "-");
-                              String s = latestExpense.optString("afternoon", "-");
-                              String d = latestExpense.optString("night", "-");
-                              String o = latestExpense.optString("other", "-");
-
-                              String fingerprint = date + "|" + total + "|" + m + "|" + l + "|" + s + "|" + d + "|" + o;
-                              String summary = "Total: ₹" + total + " | M:" + m + " N:" + l + " A:" + s + " Nt:" + d + (o.equals("-") ? "" : " Oth:" + o);
-
-                              String lastFp = prefs.getString("last_fingerprint", "");
-
-                              Calendar now = Calendar.getInstance();
-                              String todayKey = now.get(Calendar.YEAR) + "-" + now.get(Calendar.DAY_OF_YEAR);
-                              boolean isMidnightWindow = (now.get(Calendar.HOUR_OF_DAY) == 0 && now.get(Calendar.MINUTE) <= 3);
-                              String lastMidnightSent = prefs.getString("last_midnight_key", "");
-
-                              if (isMidnightReport || (isMidnightWindow && !todayKey.equals(lastMidnightSent))) {
-                                  prefs.edit().putString("last_midnight_key", todayKey).apply();
-                                  sendExpenseNotification("🌙 Daily 12 AM Expense Summary (" + date + ")", summary, 1002);
-                              }
-
-                              if (!fingerprint.equals(lastFp)) {
-                                  prefs.edit().putString("last_fingerprint", fingerprint).apply();
-                                  if (!lastFp.isEmpty()) {
-                                      sendExpenseNotification("⚡ Expense Updated (" + date + ")", summary, (int) (System.currentTimeMillis() % 10000));
-                                  }
-                              }
-                          }
-                      } catch (Exception e) {
-                          e.printStackTrace();
+                      } catch (Exception ignored) {
                       } finally {
-                          isChecking = false;
+                          isFbChecking = false;
                       }
                   }).start();
               }
 
-              private void launchFullScreenRing(String msg) {
+              private void checkSheetExpense() {
+                  new Thread(() -> {
+                      try {
+                          String res = httpGet(SHEET_API);
+                          JSONArray arr = new JSONArray(res);
+                          JSONObject latest = null;
+                          for (int i = 0; i < arr.length(); i++) {
+                              JSONObject o = arr.getJSONObject(i);
+                              if (!o.optString("date", "").contains("2099")) latest = o;
+                          }
+                          if (latest != null) {
+                              String date = latest.optString("date", "");
+                              int total = latest.optInt("total", 0);
+                              String fp = date + "|" + total + "|" + latest.optString("morning") + "|" + latest.optString("noon") + "|" + latest.optString("afternoon") + "|" + latest.optString("night") + "|" + latest.optString("other");
+                              SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                              String lastFp = prefs.getString("last_fingerprint", "");
+                              if (!fp.equals(lastFp)) {
+                                  prefs.edit().putString("last_fingerprint", fp).apply();
+                                  if (!lastFp.isEmpty()) {
+                                      sendExpenseNotification("⚡ নতুন খরচ আপডেট (" + date + ")", "মোট খরচ: ₹" + total, (int)(System.currentTimeMillis() % 10000));
+                                  }
+                              }
+                          }
+                      } catch (Exception ignored) {}
+                  }).start();
+              }
+
+              private void launchFullScreenRing(String alertId, String msg) {
                   try {
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null) {
@@ -475,6 +537,7 @@ jobs:
                   } catch (Exception ignored) {}
 
                   Intent fullScreenIntent = new Intent(this, EmergencyAlertActivity.class);
+                  fullScreenIntent.putExtra("alertId", alertId);
                   fullScreenIntent.putExtra("msg", msg);
                   fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
@@ -495,16 +558,13 @@ jobs:
                   nm.notify(911, builder.build());
 
                   handler.post(() -> {
-                      try {
-                          startActivity(fullScreenIntent);
-                      } catch (Exception ignored) {}
+                      try { startActivity(fullScreenIntent); } catch (Exception ignored) {}
                   });
               }
 
               private void createChannels() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                       NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-
                       NotificationChannel silent = new NotificationChannel(SILENT_CHANNEL, "Live Sync Status", NotificationManager.IMPORTANCE_MIN);
                       silent.setShowBadge(false);
                       nm.createNotificationChannel(silent);
@@ -524,7 +584,7 @@ jobs:
                   return new NotificationCompat.Builder(this, SILENT_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_popup_sync)
                       .setContentTitle("Campus Expense Live")
-                      .setContentText("Live cloud sync & protection active")
+                      .setContentText("Live Firebase sync & watchdog active")
                       .setOngoing(true)
                       .setPriority(NotificationCompat.PRIORITY_MIN)
                       .setContentIntent(pi)
@@ -540,9 +600,7 @@ jobs:
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setContentTitle(title)
                       .setContentText(body)
-                      .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                       .setPriority(NotificationCompat.PRIORITY_HIGH)
-                      .setDefaults(NotificationCompat.DEFAULT_ALL)
                       .setAutoCancel(true)
                       .setContentIntent(pi);
 
@@ -554,20 +612,23 @@ jobs:
 
               @Override
               public void onDestroy() {
-                  if (handler != null && checkerRunnable != null) handler.removeCallbacks(checkerRunnable);
+                  if (handler != null) {
+                      handler.removeCallbacks(fbChecker);
+                      handler.removeCallbacks(sheetChecker);
+                  }
                   super.onDestroy();
               }
           }
           EOF
 
-          # 5. Boot Receiver
-          cat << 'EOF' > "$PKG_DIR/BootReceiver.java"
+          # 4. Boot & Watchdog Receiver (Revives service every 10 mins if OS kills it)
+          cat << 'EOF' > "$PKG_DIR/WatchdogReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
           import android.content.Context;
           import android.content.Intent;
           import android.os.Build;
-          public class BootReceiver extends BroadcastReceiver {
+          public class WatchdogReceiver extends BroadcastReceiver {
               @Override
               public void onReceive(Context context, Intent intent) {
                   Intent serviceIntent = new Intent(context, LiveMonitorService.class);
@@ -580,20 +641,24 @@ jobs:
           }
           EOF
 
-          # 6. MainActivity (Sequential Permission Setup + Admin Protection Bridge)
+          # 5. MainActivity with Device Registration Bridge & Watchdog Alarm
           cat << 'EOF' > "$PKG_DIR/MainActivity.java"
           package com.ayan.expenselive;
 
           import android.Manifest;
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
           import android.app.admin.DevicePolicyManager;
           import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
+          import android.content.SharedPreferences;
           import android.content.pm.PackageManager;
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
           import android.os.PowerManager;
+          import android.os.SystemClock;
           import android.provider.Settings;
           import android.webkit.JavascriptInterface;
           import android.widget.Toast;
@@ -608,7 +673,6 @@ jobs:
               private boolean askedOverlay = false;
               private boolean askedBattery = false;
               private boolean askedAdmin = false;
-              private boolean shownReady = false;
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
@@ -616,14 +680,30 @@ jobs:
                   dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
                   adminComp = new ComponentName(this, AdminReceiver.class);
 
-                  Intent serviceIntent = new Intent(this, LiveMonitorService.class);
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      startForegroundService(serviceIntent);
-                  } else {
-                      startService(serviceIntent);
-                  }
+                  startMonitorAndWatchdog();
 
                   this.bridge.getWebView().addJavascriptInterface(new Object() {
+                      @JavascriptInterface
+                      public String getDeviceModel() {
+                          String m = Build.MANUFACTURER != null ? Build.MANUFACTURER : "";
+                          String mod = Build.MODEL != null ? Build.MODEL : "Android";
+                          if (mod.toLowerCase().startsWith(m.toLowerCase())) return mod;
+                          return (m.isEmpty() ? "" : m.substring(0, 1).toUpperCase() + m.substring(1) + " ") + mod;
+                      }
+
+                      @JavascriptInterface
+                      public void setDeviceId(String id, String label) {
+                          SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                          prefs.edit().putString("device_id", id).putString("device_label", label).apply();
+                          startMonitorAndWatchdog();
+                      }
+
+                      @JavascriptInterface
+                      public void clearDeviceId() {
+                          SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                          prefs.edit().remove("device_id").remove("device_label").apply();
+                      }
+
                       @JavascriptInterface
                       public void disableDeviceAdmin() {
                           runOnUiThread(() -> {
@@ -636,6 +716,24 @@ jobs:
                           });
                       }
                   }, "AndroidBridge");
+              }
+
+              private void startMonitorAndWatchdog() {
+                  Intent serviceIntent = new Intent(this, LiveMonitorService.class);
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(serviceIntent);
+                  } else {
+                      startService(serviceIntent);
+                  }
+
+                  try {
+                      AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+                      Intent wdIntent = new Intent(this, WatchdogReceiver.class);
+                      PendingIntent pi = PendingIntent.getBroadcast(this, 777, wdIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                      if (am != null) {
+                          am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 60000, 10 * 60 * 1000, pi);
+                      }
+                  } catch (Exception ignored) {}
               }
 
               @Override
@@ -652,17 +750,14 @@ jobs:
                           return;
                       }
                   }
-
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this) && !askedOverlay) {
                       askedOverlay = true;
-                      Toast.makeText(this, "Enable 'Display over other apps' so Ring Alert opens full-screen", Toast.LENGTH_LONG).show();
+                      Toast.makeText(this, "Enable 'Display over other apps' for full-screen ring", Toast.LENGTH_LONG).show();
                       try {
-                          Intent overlayIntent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
-                          startActivity(overlayIntent);
+                          startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
                           return;
                       } catch (Exception ignored) {}
                   }
-
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !askedBattery) {
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
@@ -675,28 +770,20 @@ jobs:
                           } catch (Exception ignored) {}
                       }
                   }
-
                   if (!dpm.isAdminActive(adminComp) && !askedAdmin) {
                       askedAdmin = true;
                       Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
                       intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp);
                       intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Prevents accidental uninstallation and keeps live sync active.");
                       startActivity(intent);
-                      return;
-                  }
-
-                  if (!shownReady && dpm.isAdminActive(adminComp)) {
-                      shownReady = true;
-                      Toast.makeText(this, "✅ Full-Screen Ring & Uninstall Protection Active!", Toast.LENGTH_LONG).show();
                   }
               }
           }
           EOF
 
-          # 7. Inject Permissions, Activities & Service into AndroidManifest.xml
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"\/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"\/>\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"\/>\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"\/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"\/>\n    <uses-permission android:name="android.permission.VIBRATE"\/>\n    <application/' "$MANIFEST"
-          sed -i 's/<\/application>/        <activity android:name=".EmergencyAlertActivity" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:exported="false" \/>\n        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".BootReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
+          sed -i 's/<\/application>/        <activity android:name=".EmergencyAlertActivity" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:exported="false" \/>\n        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".WatchdogReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
 
           npx cap sync android
 
@@ -710,9 +797,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.${{ github.run_number }}
-          name: Campus Expense Live v3.2.${{ github.run_number }}
-          body: "Added sender name (Ayan Karmakar) & app header on full-screen alert."
+          tag_name: v4.0.${{ github.run_number }}
+          name: Campus Expense Live v4.0.${{ github.run_number }}
+          body: "Firebase Realtime Ring + Watchdog + 4-Digit Login + Fuel Gauge Budget Tracker"
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
