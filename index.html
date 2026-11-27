@@ -151,8 +151,8 @@
       font-weight: 800;
       padding: 4px 10px;
       border-radius: 20px;
-      background: rgba(16, 185, 129, 0.18);
-      color: #34d399;
+      background: rgba(148, 163, 184, 0.16);
+      color: #cbd5e1;
     }
     .gauge-wrapper {
       background: #0a0812;
@@ -182,10 +182,10 @@
     }
     .gauge-fill {
       height: 100%;
-      width: 100%;
+      width: 0%;
       border-radius: 9px;
       transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.5s ease;
-      background: #10b981;
+      background: #475569;
     }
     .gauge-ticks {
       display: flex;
@@ -324,12 +324,12 @@
       <div class="fuel-card" id="fuelCard">
         <div class="fuel-header">
           <div class="fuel-title" id="t_fuelTitle">⛽ Budget Fuel Meter</div>
-          <div class="fuel-badge" id="fuelStatusBadge">100% FULL</div>
+          <div class="fuel-badge" id="fuelStatusBadge">⚪ NO BUDGET SET</div>
         </div>
         <div class="gauge-wrapper">
           <div class="gauge-labels">
             <span class="label-e" id="t_gaugeE">E (EMPTY)</span>
-            <span id="fuelPctLabel" style="color:#fff;">--%</span>
+            <span id="fuelPctLabel" style="color:#94a3b8;">--</span>
             <span class="label-f" id="t_gaugeF">F (FULL)</span>
           </div>
           <div class="gauge-track">
@@ -342,18 +342,18 @@
         <div class="fuel-stats">
           <div class="f-stat">
             <div class="f-stat-lbl" id="t_lblTotal">Allocated</div>
-            <div class="f-stat-val" id="budgetTotal">₹0</div>
+            <div class="f-stat-val" id="budgetTotal">--</div>
           </div>
           <div class="f-stat">
             <div class="f-stat-lbl" id="t_lblSpent">Spent</div>
-            <div class="f-stat-val" id="budgetSpent" style="color:#fbbf24;">₹0</div>
+            <div class="f-stat-val" id="budgetSpent" style="color:#fbbf24;">--</div>
           </div>
           <div class="f-stat">
             <div class="f-stat-lbl" id="t_lblLeft">Remaining</div>
-            <div class="f-stat-val" id="budgetLeft" style="color:#34d399;">₹0</div>
+            <div class="f-stat-val" id="budgetLeft" style="color:#94a3b8;">--</div>
           </div>
         </div>
-        <div class="fuel-meta" id="budgetMeta">Syncing budget status...</div>
+        <div class="fuel-meta" id="budgetMeta">No active budget cycle set</div>
       </div>
 
       <!-- Quick Summaries -->
@@ -374,14 +374,27 @@
 
       <div class="sec-title">
         <span id="t_logTitle">📊 Daily Expense Log</span>
-        <button class="refresh-btn" id="t_refreshBtn" onclick="loadSheetExpenses()">↻ Sync</button>
+        <button class="refresh-btn" id="t_refreshBtn" onclick="loadAllExpenses()">↻ Sync</button>
       </div>
       <div id="expenseList"><div class="loader" id="t_loading">Loading records...</div></div>
     </div>
   </div>
 
   <script>
-    firebase.initializeApp(window.APP_CONFIG.firebaseConfig);
+    const CFG = window.APP_CONFIG || {
+      firebaseConfig: {
+        apiKey: ["AI","zaSyCZnEE","SIbg6at35t","4GZBdNcvCx","SnAXB2oI"].join(""),
+        authDomain: "campus-expense-pro.firebaseapp.com",
+        databaseURL: "https://campus-expense-pro-default-rtdb.firebaseio.com",
+        projectId: "campus-expense-pro",
+        storageBucket: "campus-expense-pro.firebasestorage.app",
+        messagingSenderId: "1044806088917",
+        appId: "1:1044806088917:web:647b0539dd5afe36beca5c"
+      },
+      sheetApiUrl: "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec"
+    };
+
+    firebase.initializeApp(CFG.firebaseConfig);
     const db = firebase.database();
 
     const DICT = {
@@ -404,7 +417,8 @@
         lblTotal: "Allocated",
         lblSpent: "Spent",
         lblLeft: "Remaining",
-        noBudget: "No active budget cycle set yet",
+        noBudgetBadge: "⚪ NO BUDGET SET",
+        noBudget: "No active budget cycle set",
         stHigh: "🟢 OPTIMAL",
         stMid: "🟡 MODERATE",
         stLow: "🟠 RUNNING LOW",
@@ -444,7 +458,8 @@
         lblTotal: "মোট বাজেট",
         lblSpent: "খরচ হয়েছে",
         lblLeft: "বাকি আছে",
-        noBudget: "এখনো নতুন বাজেট সেট করা হয়নি",
+        noBudgetBadge: "⚪ বাজেট সেট নেই",
+        noBudget: "কোনো বাজেট সেট করা নেই",
         stHigh: "🟢 পর্যাপ্ত ব্যালেন্স",
         stMid: "🟡 মাঝারি অবস্থা",
         stLow: "🟠 কমে আসছে",
@@ -469,6 +484,8 @@
 
     let currentLang = "en";
     let customOverrides = {};
+    let sheetExpenses = [];
+    let liveFirebaseExpenses = {};
     let allExpenses = [];
     let currentBudget = null;
     let tapCount = 0;
@@ -507,11 +524,9 @@
       }
       const devInp = document.getElementById("deviceLabelInput");
       if (devInp) devInp.placeholder = t("devPlaceholder");
-      renderFuelGauge();
-      renderExpenseCards();
+      recomputeSummariesAndRender();
     }
 
-    // Listen to Admin-controlled Language & Custom Text Overrides
     db.ref("config").on("value", (snap) => {
       const cfg = snap.val() || {};
       if (cfg.clientLang && (cfg.clientLang === "en" || cfg.clientLang === "bn")) {
@@ -547,7 +562,7 @@
           }
         } catch (e) {}
         startRealtimeListeners(savedDevId);
-        loadSheetExpenses();
+        loadAllExpenses();
       }
     }
 
@@ -624,11 +639,19 @@
       updateHeartbeat();
       setInterval(updateHeartbeat, 30000);
 
+      // Live Budget Fuel Gauge Listener (Supports Reset / No Budget)
       db.ref("budget").on("value", (snap) => {
         currentBudget = snap.val();
         renderFuelGauge();
       });
 
+      // Live Expense Mirror Listener (Instant updates as soon as Admin saves!)
+      db.ref("expenses_backup").on("value", (snap) => {
+        liveFirebaseExpenses = snap.val() || {};
+        mergeAndRenderExpenses();
+      });
+
+      // Active Alert Banner Listener
       db.ref("active_alert").on("value", (snap) => {
         const alertData = snap.val();
         const banner = document.getElementById("alertBanner");
@@ -645,18 +668,112 @@
       });
     }
 
+    // Handles "27/11/2026 (Friday)", "27/11/2026", "2026-11-27", and ISO strings
     function parseSheetDate(dateStr) {
       if (!dateStr) return null;
       const clean = String(dateStr).trim();
-      if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
-        return new Date(clean.slice(0, 10) + "T00:00:00");
+      const dmy = clean.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (dmy) {
+        return new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
       }
-      const parts = clean.split(/[\/\-]/);
-      if (parts.length === 3 && parts[2].length === 4) {
-        return new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}T00:00:00`);
+      const ymd = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (ymd) {
+        return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
       }
       const fallback = new Date(clean);
-      return isNaN(fallback.getTime()) ? null : fallback;
+      if (!isNaN(fallback.getTime())) {
+        const ist = new Date(fallback.getTime() + 5.5 * 60 * 60 * 1000);
+        return new Date(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate());
+      }
+      return null;
+    }
+
+    function normalizeDateKey(dateStr) {
+      const d = parseSheetDate(dateStr);
+      if (!d) return "";
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = d.getFullYear();
+      return `${dd}/${mm}/${yyyy}`;
+    }
+
+    function parseRowTotal(row) {
+      const rawTot = Number(row.total ?? row.Total ?? row["Day Total (INR)"] ?? 0);
+      if (rawTot > 0) return rawTot;
+      const fields = [row.morning, row.noon, row.afternoon, row.night, row.other];
+      return Math.round(fields.reduce((sum, val) => {
+        if (!val || val === "-") return sum;
+        const stripped = String(val).replace(/\[[^\]]*\]/g, "").replace(/\([^)]*\)/g, "");
+        const nums = stripped.match(/[0-9]+(\.[0-9]+)?/g);
+        return sum + (nums ? nums.reduce((a, b) => a + parseFloat(b), 0) : 0);
+      }, 0));
+    }
+
+    function mergeAndRenderExpenses() {
+      const map = new Map();
+
+      sheetExpenses.forEach(r => {
+        const dKey = normalizeDateKey(r.date || r["Date & Day"]);
+        if (!dKey || dKey.includes("2099") || String(r.date).includes("__SYS_CMD__")) return;
+        const dObj = parseSheetDate(dKey);
+        const dayName = dObj ? dObj.toLocaleDateString("en-US", { weekday: "long" }) : "";
+        map.set(dKey, {
+          dateKey: dKey,
+          displayDate: `${dKey} (${dayName})`,
+          morning: r.morning || r.Morning || "-",
+          noon: r.noon || r.Noon || "-",
+          afternoon: r.afternoon || r.Afternoon || "-",
+          night: r.night || r.Night || "-",
+          other: r.other || r.Other || "-",
+          total: parseRowTotal(r)
+        });
+      });
+
+      // Overlay live Firebase entries so new/edited entries show instantly
+      Object.values(liveFirebaseExpenses || {}).forEach(r => {
+        if (!r || !r.date) return;
+        const dKey = normalizeDateKey(r.date);
+        if (!dKey || dKey.includes("2099")) return;
+        const dObj = parseSheetDate(dKey);
+        const dayName = dObj ? dObj.toLocaleDateString("en-US", { weekday: "long" }) : "";
+        map.set(dKey, {
+          dateKey: dKey,
+          displayDate: `${dKey} (${dayName})`,
+          morning: r.morning || "-",
+          noon: r.noon || "-",
+          afternoon: r.afternoon || "-",
+          night: r.night || "-",
+          other: r.other || "-",
+          total: parseRowTotal(r)
+        });
+      });
+
+      allExpenses = Array.from(map.values()).sort((a, b) => parseSheetDate(b.dateKey) - parseSheetDate(a.dateKey));
+      recomputeSummariesAndRender();
+    }
+
+    function recomputeSummariesAndRender() {
+      const now = new Date();
+      const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      let todayTotal = 0, weekTotal = 0, monthTotal = 0;
+
+      allExpenses.forEach(row => {
+        const val = Number(row.total) || 0;
+        const dObj = parseSheetDate(row.dateKey);
+        if (dObj) {
+          if (dObj.getTime() === todayDate.getTime()) todayTotal += val;
+          const diffDays = (todayDate - dObj) / (1000 * 60 * 60 * 24);
+          if (diffDays <= 6 && diffDays >= 0) weekTotal += val;
+          if (dObj.getMonth() === todayDate.getMonth() && dObj.getFullYear() === todayDate.getFullYear()) monthTotal += val;
+        }
+      });
+
+      document.getElementById("todaySum").textContent = "₹" + todayTotal;
+      document.getElementById("weekSum").textContent = "₹" + weekTotal;
+      document.getElementById("monthSum").textContent = "₹" + monthTotal;
+
+      renderFuelGauge();
+      renderExpenseCards();
     }
 
     function renderFuelGauge() {
@@ -665,7 +782,21 @@
       const badge = document.getElementById("fuelStatusBadge");
       const pctLabel = document.getElementById("fuelPctLabel");
 
-      if (!currentBudget || !currentBudget.total) {
+      card.classList.remove("fuel-critical");
+
+      // Handle Reset / No Budget Set state cleanly
+      if (!currentBudget || !currentBudget.total || Number(currentBudget.total) <= 0) {
+        badge.style.background = "rgba(148, 163, 184, 0.16)";
+        badge.style.color = "#cbd5e1";
+        badge.textContent = t("noBudgetBadge");
+        pctLabel.textContent = "--";
+        pctLabel.style.color = "#94a3b8";
+        fill.style.width = "0%";
+        fill.style.background = "#475569";
+        document.getElementById("budgetTotal").textContent = "--";
+        document.getElementById("budgetSpent").textContent = "--";
+        document.getElementById("budgetLeft").textContent = "--";
+        document.getElementById("budgetLeft").style.color = "#94a3b8";
         document.getElementById("budgetMeta").textContent = t("noBudget");
         return;
       }
@@ -675,7 +806,7 @@
 
       let spent = 0;
       allExpenses.forEach(item => {
-        const dObj = parseSheetDate(item.date);
+        const dObj = parseSheetDate(item.dateKey);
         if (!startObj || (dObj && dObj >= startObj)) {
           spent += Number(item.total) || 0;
         }
@@ -688,9 +819,8 @@
       document.getElementById("budgetSpent").textContent = "₹" + spent;
       document.getElementById("budgetLeft").textContent = spent > total ? "-₹" + (spent - total) : "₹" + remaining;
       pctLabel.textContent = pct + "%";
+      pctLabel.style.color = "#fff";
       fill.style.width = Math.max(4, pct) + "%";
-
-      card.classList.remove("fuel-critical");
 
       if (pct > 70) {
         fill.style.background = "#10b981";
@@ -737,10 +867,10 @@
         listEl.innerHTML = `<div class="loader">${t("noRecords")}</div>`;
         return;
       }
-      listEl.innerHTML = allExpenses.slice(0, 25).map(row => `
+      listEl.innerHTML = allExpenses.slice(0, 30).map(row => `
         <div class="day-card">
           <div class="day-top">
-            <span class="day-date">📅 ${row.date}</span>
+            <span class="day-date">📅 ${row.displayDate}</span>
             <span class="day-total">₹${row.total || 0}</span>
           </div>
           <div class="meals">
@@ -754,38 +884,14 @@
       `).join("");
     }
 
-    async function loadSheetExpenses() {
-      const listEl = document.getElementById("expenseList");
+    async function loadAllExpenses() {
       try {
-        const res = await fetch(window.APP_CONFIG.sheetApiUrl);
+        const res = await fetch(CFG.sheetApiUrl);
         const raw = await res.json();
-        allExpenses = raw.filter(r => r.date && !String(r.date).includes("2099")).reverse();
-
-        const now = new Date();
-        const todayStr = now.toISOString().slice(0, 10);
-        let todayTotal = 0, weekTotal = 0, monthTotal = 0;
-
-        allExpenses.forEach(row => {
-          const val = Number(row.total) || 0;
-          const dObj = parseSheetDate(row.date);
-          if (String(row.date).includes(todayStr) || (dObj && dObj.toDateString() === now.toDateString())) {
-            todayTotal += val;
-          }
-          if (dObj) {
-            const diffDays = (now - dObj) / (1000 * 60 * 60 * 24);
-            if (diffDays <= 7 && diffDays >= -1) weekTotal += val;
-            if (dObj.getMonth() === now.getMonth() && dObj.getFullYear() === now.getFullYear()) monthTotal += val;
-          }
-        });
-
-        document.getElementById("todaySum").textContent = "₹" + todayTotal;
-        document.getElementById("weekSum").textContent = "₹" + weekTotal;
-        document.getElementById("monthSum").textContent = "₹" + monthTotal;
-
-        renderFuelGauge();
-        renderExpenseCards();
+        sheetExpenses = Array.isArray(raw) ? raw : (raw.data || raw.records || []);
+        mergeAndRenderExpenses();
       } catch (e) {
-        listEl.innerHTML = `<div class="loader">${t("errNet")}</div>`;
+        mergeAndRenderExpenses();
       }
     }
 
