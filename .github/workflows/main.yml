@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject Firebase Alert + Watchdog + Uninstall Protection
+      - name: Build Capacitor & Inject Custom Audio + Remote Volume Control
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -78,7 +78,7 @@ jobs:
           }
           EOF
 
-          # 2. Full-Screen Alert Activity with Seen Status Reporting
+          # 2. Full-Screen Alert Activity with Custom Audio & Remote Volume Control
           cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
           package com.ayan.expenselive;
 
@@ -107,6 +107,7 @@ jobs:
           import android.widget.LinearLayout;
           import android.widget.TextView;
           import org.json.JSONObject;
+          import java.io.File;
           import java.io.OutputStream;
           import java.net.HttpURLConnection;
           import java.net.URL;
@@ -156,8 +157,10 @@ jobs:
                   if (alertId == null) alertId = "";
                   String msg = getIntent().getStringExtra("msg");
                   if (msg == null || msg.trim().isEmpty()) {
-                      msg = "জরুরি দরকার! একটু কথা আছে।";
+                      msg = "Priority Alert! Please check.";
                   }
+                  int volumePct = getIntent().getIntExtra("volume", 100);
+                  boolean useCustomAudio = getIntent().getBooleanExtra("useCustomAudio", false);
 
                   LinearLayout root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
@@ -175,17 +178,17 @@ jobs:
                   root.addView(appHeader);
 
                   TextView senderName = new TextView(this);
-                  senderName.setText("AYAN KARMAKAR (অয়ন)");
+                  senderName.setText("AYAN KARMAKAR");
                   senderName.setTextColor(Color.parseColor("#F59E0B"));
-                  senderName.setTextSize(24f);
+                  senderName.setTextSize(25f);
                   senderName.setTypeface(null, Typeface.BOLD);
                   senderName.setGravity(Gravity.CENTER);
                   root.addView(senderName);
 
                   TextView subLabel = new TextView(this);
-                  subLabel.setText("জরুরি মেসেজ পাঠিয়েছে");
+                  subLabel.setText("Priority Notice • Sound " + volumePct + "%");
                   subLabel.setTextColor(Color.parseColor("#CBD5E1"));
-                  subLabel.setTextSize(16f);
+                  subLabel.setTextSize(15f);
                   subLabel.setGravity(Gravity.CENTER);
                   subLabel.setPadding(0, 10, 0, 50);
                   root.addView(subLabel);
@@ -225,10 +228,10 @@ jobs:
                   root.addView(stopBtn);
 
                   setContentView(root);
-                  startLoudRing();
+                  startRingWithVolume(volumePct, useCustomAudio);
               }
 
-              private void startLoudRing() {
+              private void startRingWithVolume(int volumePct, boolean useCustomAudio) {
                   try {
                       vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
                       if (vibrator != null && vibrator.hasVibrator()) {
@@ -241,21 +244,16 @@ jobs:
                       }
                   } catch (Exception ignored) {}
 
+                  if (volumePct <= 0) return;
+
                   try {
                       audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
                       if (audioManager != null) {
                           originalAlarmVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM);
                           int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM);
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxVol, 0);
-                      }
-
-                      int resId = getResources().getIdentifier("alert", "raw", getPackageName());
-                      Uri soundUri = (resId != 0)
-                          ? Uri.parse("android.resource://" + getPackageName() + "/" + resId)
-                          : RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-
-                      if (soundUri == null) {
-                          soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                          int clamped = Math.max(1, Math.min(100, volumePct));
+                          int targetVol = Math.max(1, Math.round((clamped / 100.0f) * maxVol));
+                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, targetVol, 0);
                       }
 
                       mediaPlayer = new MediaPlayer();
@@ -265,10 +263,37 @@ jobs:
                               .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                               .build()
                       );
-                      mediaPlayer.setDataSource(this, soundUri);
-                      mediaPlayer.setLooping(true);
-                      mediaPlayer.prepare();
-                      mediaPlayer.start();
+
+                      boolean customLoaded = false;
+                      if (useCustomAudio) {
+                          File customFile = new File(getCacheDir(), "custom_ring.mp3");
+                          if (customFile.exists() && customFile.length() > 100) {
+                              try {
+                                  mediaPlayer.setDataSource(customFile.getAbsolutePath());
+                                  mediaPlayer.setLooping(true);
+                                  mediaPlayer.prepare();
+                                  mediaPlayer.start();
+                                  customLoaded = true;
+                              } catch (Exception e) {
+                                  mediaPlayer.reset();
+                              }
+                          }
+                      }
+
+                      if (!customLoaded) {
+                          int resId = getResources().getIdentifier("alert", "raw", getPackageName());
+                          Uri soundUri = (resId != 0)
+                              ? Uri.parse("android.resource://" + getPackageName() + "/" + resId)
+                              : RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+
+                          if (soundUri == null) {
+                              soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                          }
+                          mediaPlayer.setDataSource(this, soundUri);
+                          mediaPlayer.setLooping(true);
+                          mediaPlayer.prepare();
+                          mediaPlayer.start();
+                      }
                   } catch (Exception ignored) {}
               }
 
@@ -330,7 +355,7 @@ jobs:
           }
           EOF
 
-          # 3. Persistent Firebase Realtime Monitor Service
+          # 3. Persistent Firebase Realtime Monitor Service (Downloads Per-Device Custom Audio + Volume)
           cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
@@ -347,10 +372,13 @@ jobs:
           import android.os.IBinder;
           import android.os.Looper;
           import android.os.PowerManager;
+          import android.util.Base64;
           import androidx.core.app.NotificationCompat;
           import org.json.JSONArray;
           import org.json.JSONObject;
           import java.io.BufferedReader;
+          import java.io.File;
+          import java.io.FileOutputStream;
           import java.io.InputStreamReader;
           import java.io.OutputStream;
           import java.net.HttpURLConnection;
@@ -362,7 +390,7 @@ jobs:
               private static final String SHEET_API = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
               private static final String SILENT_CHANNEL = "live_monitor_silent";
               private static final String ALERT_CHANNEL = "expense_live_alerts";
-              private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v2";
+              private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v3";
               private Handler handler;
               private Runnable fbChecker;
               private Runnable sheetChecker;
@@ -376,7 +404,6 @@ jobs:
 
                   handler = new Handler(Looper.getMainLooper());
 
-                  // Fast 4-second Firebase Realtime Alert Listener
                   fbChecker = new Runnable() {
                       @Override
                       public void run() {
@@ -386,7 +413,6 @@ jobs:
                   };
                   handler.post(fbChecker);
 
-                  // 30-second Expense Update Notification Listener
                   sheetChecker = new Runnable() {
                       @Override
                       public void run() {
@@ -408,8 +434,8 @@ jobs:
                   for (int i = 0; i < 4; i++) {
                       HttpURLConnection conn = (HttpURLConnection) new URL(current).openConnection();
                       conn.setInstanceFollowRedirects(true);
-                      conn.setConnectTimeout(8000);
-                      conn.setReadTimeout(8000);
+                      conn.setConnectTimeout(10000);
+                      conn.setReadTimeout(15000);
                       int code = conn.getResponseCode();
                       if (code == 301 || code == 302 || code == 307 || code == 308) {
                           current = conn.getHeaderField("Location");
@@ -442,6 +468,33 @@ jobs:
                   } catch (Exception ignored) {}
               }
 
+              private boolean prepareCustomAudio(String deviceId) {
+                  try {
+                      String audioRaw = httpGet(FB_DB + "/device_audio/" + deviceId + ".json");
+                      if (audioRaw == null || audioRaw.trim().equals("null") || audioRaw.trim().isEmpty()) {
+                          audioRaw = httpGet(FB_DB + "/device_audio/ALL.json");
+                      }
+                      if (audioRaw == null || audioRaw.trim().equals("null") || audioRaw.trim().isEmpty()) {
+                          return false;
+                      }
+                      JSONObject obj = new JSONObject(audioRaw);
+                      String b64 = obj.optString("base64", "");
+                      if (b64.isEmpty()) return false;
+                      if (b64.contains(",")) {
+                          b64 = b64.substring(b64.indexOf(",") + 1);
+                      }
+                      byte[] decoded = Base64.decode(b64, Base64.DEFAULT);
+                      File outFile = new File(getCacheDir(), "custom_ring.mp3");
+                      FileOutputStream fos = new FileOutputStream(outFile);
+                      fos.write(decoded);
+                      fos.flush();
+                      fos.close();
+                      return outFile.exists() && outFile.length() > 100;
+                  } catch (Exception e) {
+                      return false;
+                  }
+              }
+
               private void checkFirebaseAlert() {
                   if (isFbChecking) return;
                   SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
@@ -452,14 +505,12 @@ jobs:
                   isFbChecking = true;
                   new Thread(() -> {
                       try {
-                          // Check if device was kicked by admin
                           String devRaw = httpGet(FB_DB + "/devices/" + deviceId + ".json");
                           if (devRaw != null && (devRaw.trim().equals("null") || devRaw.contains("\"kicked\""))) {
                               prefs.edit().remove("device_id").remove("device_label").apply();
                               return;
                           }
 
-                          // Check active alert
                           String alertRaw = httpGet(FB_DB + "/active_alert.json");
                           if (alertRaw == null || alertRaw.trim().equals("null") || alertRaw.trim().isEmpty()) return;
 
@@ -467,7 +518,9 @@ jobs:
                           String status = alertObj.optString("status", "");
                           String alertId = alertObj.optString("id", "");
                           String target = alertObj.optString("target", "ALL");
-                          String msg = alertObj.optString("msg", "জরুরি দরকার!");
+                          String msg = alertObj.optString("msg", "Priority Alert!");
+                          int volume = alertObj.optInt("volume", 100);
+                          boolean wantCustomAudio = alertObj.optBoolean("useCustomAudio", true);
 
                           String lastAlertId = prefs.getString("last_fb_alert_id", "");
 
@@ -475,14 +528,18 @@ jobs:
                               if ("ALL".equals(target) || deviceId.equals(target)) {
                                   prefs.edit().putString("last_fb_alert_id", alertId).apply();
 
-                                  // Report RINGING status immediately to Firebase
+                                  boolean hasCustom = false;
+                                  if (wantCustomAudio) {
+                                      hasCustom = prepareCustomAudio(deviceId);
+                                  }
+
                                   JSONObject st = new JSONObject();
                                   st.put("state", "ringing");
                                   st.put("deviceLabel", deviceLabel);
                                   st.put("updatedAt", System.currentTimeMillis());
                                   httpPutJson(FB_DB + "/alert_status/" + alertId + "/" + deviceId + ".json", st.toString());
 
-                                  launchFullScreenRing(alertId, msg);
+                                  launchFullScreenRing(alertId, msg, volume, hasCustom);
                               }
                           } else if ("stopped".equals(status) && !alertId.equals(prefs.getString("last_stopped_id", ""))) {
                               prefs.edit().putString("last_stopped_id", alertId).apply();
@@ -516,7 +573,7 @@ jobs:
                               if (!fp.equals(lastFp)) {
                                   prefs.edit().putString("last_fingerprint", fp).apply();
                                   if (!lastFp.isEmpty()) {
-                                      sendExpenseNotification("⚡ নতুন খরচ আপডেট (" + date + ")", "মোট খরচ: ₹" + total, (int)(System.currentTimeMillis() % 10000));
+                                      sendExpenseNotification("⚡ Expense Updated (" + date + ")", "Total: ₹" + total, (int)(System.currentTimeMillis() % 10000));
                                   }
                               }
                           }
@@ -524,7 +581,7 @@ jobs:
                   }).start();
               }
 
-              private void launchFullScreenRing(String alertId, String msg) {
+              private void launchFullScreenRing(String alertId, String msg, int volume, boolean useCustomAudio) {
                   try {
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null) {
@@ -539,6 +596,8 @@ jobs:
                   Intent fullScreenIntent = new Intent(this, EmergencyAlertActivity.class);
                   fullScreenIntent.putExtra("alertId", alertId);
                   fullScreenIntent.putExtra("msg", msg);
+                  fullScreenIntent.putExtra("volume", volume);
+                  fullScreenIntent.putExtra("useCustomAudio", useCustomAudio);
                   fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
                   PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
@@ -547,7 +606,7 @@ jobs:
 
                   NotificationCompat.Builder builder = new NotificationCompat.Builder(this, FULLSCREEN_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_dialog_email)
-                      .setContentTitle("🔔 Ayan Karmakar (অয়ন)")
+                      .setContentTitle("🔔 Ayan Karmakar")
                       .setContentText(msg)
                       .setPriority(NotificationCompat.PRIORITY_MAX)
                       .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -572,7 +631,7 @@ jobs:
                       NotificationChannel alert = new NotificationChannel(ALERT_CHANNEL, "Expense Update Alerts", NotificationManager.IMPORTANCE_HIGH);
                       nm.createNotificationChannel(alert);
 
-                      NotificationChannel fullScreen = new NotificationChannel(FULLSCREEN_CHANNEL, "Ayan Full-Screen Ring Alerts", NotificationManager.IMPORTANCE_HIGH);
+                      NotificationChannel fullScreen = new NotificationChannel(FULLSCREEN_CHANNEL, "Priority Ring Alerts", NotificationManager.IMPORTANCE_HIGH);
                       fullScreen.setBypassDnd(true);
                       nm.createNotificationChannel(fullScreen);
                   }
@@ -584,7 +643,7 @@ jobs:
                   return new NotificationCompat.Builder(this, SILENT_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_popup_sync)
                       .setContentTitle("Campus Expense Live")
-                      .setContentText("Live Firebase sync & watchdog active")
+                      .setContentText("Live cloud sync & watchdog active")
                       .setOngoing(true)
                       .setPriority(NotificationCompat.PRIORITY_MIN)
                       .setContentIntent(pi)
@@ -621,7 +680,7 @@ jobs:
           }
           EOF
 
-          # 4. Boot & Watchdog Receiver (Revives service every 10 mins if OS kills it)
+          # 4. Boot & Watchdog Receiver
           cat << 'EOF' > "$PKG_DIR/WatchdogReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
@@ -641,7 +700,7 @@ jobs:
           }
           EOF
 
-          # 5. MainActivity with Device Registration Bridge & Watchdog Alarm
+          # 5. MainActivity
           cat << 'EOF' > "$PKG_DIR/MainActivity.java"
           package com.ayan.expenselive;
 
@@ -797,9 +856,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.0.${{ github.run_number }}
-          name: Campus Expense Live v4.0.${{ github.run_number }}
-          body: "Firebase Realtime Ring + Watchdog + 4-Digit Login + Fuel Gauge Budget Tracker"
+          tag_name: v4.1.${{ github.run_number }}
+          name: Campus Expense Live v4.1.${{ github.run_number }}
+          body: "Per-Device Custom Audio Playback + Remote Volume Control (0-100%)"
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
