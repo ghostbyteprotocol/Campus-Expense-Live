@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Campus Expense Live</title>
-  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
   <script src="firebase-config.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
@@ -44,8 +44,8 @@
       text-align: center;
       box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
     }
-    .login-icon { font-size: 46px; margin-bottom: 10px; }
-    .login-title { font-size: 22px; font-weight: 800; color: #fff; }
+    .login-icon { font-size: 44px; margin-bottom: 10px; }
+    .login-title { font-size: 22px; font-weight: 800; color: #fff; letter-spacing: -0.3px; }
     .login-sub { font-size: 13px; color: var(--muted); margin: 6px 0 22px; }
     .input-group { text-align: left; margin-bottom: 14px; }
     .input-group label { display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 6px; font-weight: 600; }
@@ -59,6 +59,7 @@
       font-size: 15px;
       outline: none;
     }
+    .input-field:focus { border-color: #a855f7; }
     .code-input {
       text-align: center;
       font-size: 24px;
@@ -73,7 +74,7 @@
       border: none;
       border-radius: 14px;
       padding: 14px;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
       cursor: pointer;
     }
@@ -172,21 +173,19 @@
     .label-f { color: #10b981; }
     .gauge-track {
       position: relative;
-      height: 26px;
+      height: 24px;
       background: #1e1b2e;
-      border-radius: 13px;
+      border-radius: 12px;
       overflow: hidden;
       display: flex;
       padding: 3px;
-      gap: 3px;
     }
     .gauge-fill {
       height: 100%;
       width: 100%;
-      border-radius: 10px;
+      border-radius: 9px;
       transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.5s ease;
       background: #10b981;
-      position: relative;
     }
     .gauge-ticks {
       display: flex;
@@ -284,17 +283,17 @@
     <div id="loginScreen">
       <div class="login-box">
         <div class="login-icon">🔐</div>
-        <div class="login-title">Campus Expense Live</div>
-        <div class="login-sub">অয়ন (Ayan)-এর বানানো ৪-ডিজিট অ্যাক্সেস কোড দিয়ে লগইন করুন</div>
+        <div class="login-title" id="t_loginTitle">Campus Expense Live</div>
+        <div class="login-sub" id="t_loginSub">Enter the 4-digit access PIN to authorize this device</div>
         <div class="input-group">
-          <label>ডিভাইসের নাম (যেমন: বাবার ফোন / দাদার ফোন)</label>
-          <input type="text" id="deviceLabelInput" class="input-field" placeholder="বাবার ফোন" />
+          <label id="t_devLabel">Device Name (Optional)</label>
+          <input type="text" id="deviceLabelInput" class="input-field" placeholder="e.g. Primary Phone / Desk" />
         </div>
         <div class="input-group">
-          <label>৪-ডিজিট অ্যাক্সেস কোড</label>
+          <label id="t_pinLabel">4-Digit Access PIN</label>
           <input type="tel" id="accessCodeInput" maxlength="4" class="input-field code-input" placeholder="••••" />
         </div>
-        <button class="btn-primary" onclick="verifyLogin()">লগইন করুন</button>
+        <button class="btn-primary" id="t_loginBtn" onclick="verifyLogin()">Verify & Connect</button>
         <div class="login-err" id="loginError"></div>
       </div>
     </div>
@@ -305,8 +304,8 @@
         <div class="brand" onclick="handleSecretTap()">
           <div class="brand-logo">🎓</div>
           <div>
-            <h1>Campus Expense</h1>
-            <p>● Live Sync Active</p>
+            <h1 id="t_appTitle">Campus Expense</h1>
+            <p id="t_liveStatus">● Live Cloud Sync</p>
           </div>
         </div>
         <div class="device-pill" id="deviceBadge">📱 Connected</div>
@@ -315,8 +314,8 @@
       <!-- Active Alert Banner -->
       <div id="alertBanner">
         <div class="alert-top">
-          <span>🔔 অয়নের জরুরি মেসেজ</span>
-          <span id="alertTime">এখনই</span>
+          <span id="t_alertHeader">🔔 PRIORITY NOTICE</span>
+          <span id="alertTime">Just now</span>
         </div>
         <div class="alert-msg" id="alertText"></div>
       </div>
@@ -324,14 +323,14 @@
       <!-- Car Fuel Gauge Budget Meter -->
       <div class="fuel-card" id="fuelCard">
         <div class="fuel-header">
-          <div class="fuel-title">⛽ পকেটমানি ফুয়েল মিটার</div>
+          <div class="fuel-title" id="t_fuelTitle">⛽ Budget Fuel Meter</div>
           <div class="fuel-badge" id="fuelStatusBadge">100% FULL</div>
         </div>
         <div class="gauge-wrapper">
           <div class="gauge-labels">
-            <span class="label-e">E (শেষ)</span>
+            <span class="label-e" id="t_gaugeE">E (EMPTY)</span>
             <span id="fuelPctLabel" style="color:#fff;">--%</span>
-            <span class="label-f">F (ফুল)</span>
+            <span class="label-f" id="t_gaugeF">F (FULL)</span>
           </div>
           <div class="gauge-track">
             <div class="gauge-fill" id="fuelFillBar"></div>
@@ -342,42 +341,42 @@
         </div>
         <div class="fuel-stats">
           <div class="f-stat">
-            <div class="f-stat-lbl">মোট বাজেট</div>
+            <div class="f-stat-lbl" id="t_lblTotal">Allocated</div>
             <div class="f-stat-val" id="budgetTotal">₹0</div>
           </div>
           <div class="f-stat">
-            <div class="f-stat-lbl">খরচ হয়েছে</div>
+            <div class="f-stat-lbl" id="t_lblSpent">Spent</div>
             <div class="f-stat-val" id="budgetSpent" style="color:#fbbf24;">₹0</div>
           </div>
           <div class="f-stat">
-            <div class="f-stat-lbl">বাকি আছে</div>
+            <div class="f-stat-lbl" id="t_lblLeft">Remaining</div>
             <div class="f-stat-val" id="budgetLeft" style="color:#34d399;">₹0</div>
           </div>
         </div>
-        <div class="fuel-meta" id="budgetMeta">বাজেট লোড হচ্ছে...</div>
+        <div class="fuel-meta" id="budgetMeta">Syncing budget status...</div>
       </div>
 
       <!-- Quick Summaries -->
       <div class="summary-grid">
         <div class="sum-card">
-          <div class="sum-lbl">আজকের খরচ</div>
+          <div class="sum-lbl" id="t_sumToday">Today</div>
           <div class="sum-val" id="todaySum">₹0</div>
         </div>
         <div class="sum-card">
-          <div class="sum-lbl">গত ৭ দিন</div>
+          <div class="sum-lbl" id="t_sumWeek">Last 7 Days</div>
           <div class="sum-val" id="weekSum">₹0</div>
         </div>
         <div class="sum-card">
-          <div class="sum-lbl">এই মাস</div>
+          <div class="sum-lbl" id="t_sumMonth">This Month</div>
           <div class="sum-val" id="monthSum">₹0</div>
         </div>
       </div>
 
       <div class="sec-title">
-        <span>📊 দৈনিক খরচের হিসাব</span>
-        <button class="refresh-btn" onclick="loadSheetExpenses()">↻ রিফ্রেশ</button>
+        <span id="t_logTitle">📊 Daily Expense Log</span>
+        <button class="refresh-btn" id="t_refreshBtn" onclick="loadSheetExpenses()">↻ Sync</button>
       </div>
-      <div id="expenseList"><div class="loader">হিসাব লোড হচ্ছে...</div></div>
+      <div id="expenseList"><div class="loader" id="t_loading">Loading records...</div></div>
     </div>
   </div>
 
@@ -385,10 +384,142 @@
     firebase.initializeApp(window.APP_CONFIG.firebaseConfig);
     const db = firebase.database();
 
+    const DICT = {
+      en: {
+        loginTitle: "Campus Expense Live",
+        loginSub: "Enter the 4-digit access PIN to authorize this device",
+        devLabel: "Device Name (Optional)",
+        devPlaceholder: "e.g. Primary Phone / Desk",
+        pinLabel: "4-Digit Access PIN",
+        loginBtn: "Verify & Connect",
+        errPinLen: "Please enter a valid 4-digit PIN.",
+        errWrongPin: "❌ Invalid PIN! Check with Admin.",
+        errNet: "Network error. Please check your internet.",
+        appTitle: "Campus Expense",
+        liveStatus: "● Live Cloud Sync",
+        alertHeader: "🔔 PRIORITY NOTICE",
+        fuelTitle: "⛽ Budget Fuel Meter",
+        gaugeE: "E (EMPTY)",
+        gaugeF: "F (FULL)",
+        lblTotal: "Allocated",
+        lblSpent: "Spent",
+        lblLeft: "Remaining",
+        noBudget: "No active budget cycle set yet",
+        stHigh: "🟢 OPTIMAL",
+        stMid: "🟡 MODERATE",
+        stLow: "🟠 RUNNING LOW",
+        stCrit: "🔴 NEAR EMPTY",
+        stEmpty: "🚨 CRITICAL LOW",
+        sumToday: "Today",
+        sumWeek: "Last 7 Days",
+        sumMonth: "This Month",
+        logTitle: "📊 Daily Expense Log",
+        refreshBtn: "↻ Sync",
+        loading: "Loading records...",
+        noRecords: "No expense records found",
+        mMorning: "🌅 Morning",
+        mNoon: "☀️ Noon",
+        mAfternoon: "🌇 Afternoon",
+        mNight: "🌙 Night",
+        mOther: "📦 Other",
+        startLbl: "Start",
+        daysLbl: "days"
+      },
+      bn: {
+        loginTitle: "Campus Expense Live",
+        loginSub: "ডিভাইস ভেরিফাই করতে ৪-ডিজিট অ্যাক্সেস পিন দিন",
+        devLabel: "ডিভাইসের নাম (ঐচ্ছিক)",
+        devPlaceholder: "যেমন: প্রাইমারি ফোন / শপ ডেস্ক",
+        pinLabel: "৪-ডিজিট অ্যাক্সেস পিন",
+        loginBtn: "ভেরিফাই ও কানেক্ট করুন",
+        errPinLen: "সঠিক ৪ সংখ্যার পিন দিন।",
+        errWrongPin: "❌ ভুল পিন! অ্যাডমিনের কাছ থেকে সঠিক পিন নিন।",
+        errNet: "নেটওয়ার্ক সমস্যা! ইন্টারনেট চেক করুন।",
+        appTitle: "Campus Expense",
+        liveStatus: "● লাইভ ক্লাউড সিঙ্ক",
+        alertHeader: "🔔 জরুরি বার্তা",
+        fuelTitle: "⛽ বাজেট ফুয়েল মিটার",
+        gaugeE: "E (শেষ)",
+        gaugeF: "F (ফুল)",
+        lblTotal: "মোট বাজেট",
+        lblSpent: "খরচ হয়েছে",
+        lblLeft: "বাকি আছে",
+        noBudget: "এখনো নতুন বাজেট সেট করা হয়নি",
+        stHigh: "🟢 পর্যাপ্ত ব্যালেন্স",
+        stMid: "🟡 মাঝারি অবস্থা",
+        stLow: "🟠 কমে আসছে",
+        stCrit: "🔴 প্রায় শেষ",
+        stEmpty: "🚨 একদম শেষ পর্যায়ে",
+        sumToday: "আজকের খরচ",
+        sumWeek: "গত ৭ দিন",
+        sumMonth: "এই মাস",
+        logTitle: "📊 দৈনিক খরচের হিসাব",
+        refreshBtn: "↻ রিফ্রেশ",
+        loading: "হিসাব লোড হচ্ছে...",
+        noRecords: "কোনো খরচের হিসাব পাওয়া যায়নি",
+        mMorning: "🌅 সকাল",
+        mNoon: "☀️ দুপুর",
+        mAfternoon: "🌇 বিকেল",
+        mNight: "🌙 রাত",
+        mOther: "📦 অন্যান্য",
+        startLbl: "শুরু",
+        daysLbl: "দিন"
+      }
+    };
+
+    let currentLang = "en";
+    let customOverrides = {};
     let allExpenses = [];
     let currentBudget = null;
     let tapCount = 0;
     let tapTimer = null;
+
+    function t(key) {
+      if (customOverrides && customOverrides[key]) return customOverrides[key];
+      return (DICT[currentLang] && DICT[currentLang][key]) || DICT.en[key] || key;
+    }
+
+    function applyTranslations() {
+      const map = {
+        t_loginTitle: "loginTitle",
+        t_loginSub: "loginSub",
+        t_devLabel: "devLabel",
+        t_pinLabel: "pinLabel",
+        t_loginBtn: "loginBtn",
+        t_appTitle: "appTitle",
+        t_liveStatus: "liveStatus",
+        t_alertHeader: "alertHeader",
+        t_fuelTitle: "fuelTitle",
+        t_gaugeE: "gaugeE",
+        t_gaugeF: "gaugeF",
+        t_lblTotal: "lblTotal",
+        t_lblSpent: "lblSpent",
+        t_lblLeft: "lblLeft",
+        t_sumToday: "sumToday",
+        t_sumWeek: "sumWeek",
+        t_sumMonth: "sumMonth",
+        t_logTitle: "logTitle",
+        t_refreshBtn: "refreshBtn"
+      };
+      for (const [elId, key] of Object.entries(map)) {
+        const el = document.getElementById(elId);
+        if (el) el.textContent = t(key);
+      }
+      const devInp = document.getElementById("deviceLabelInput");
+      if (devInp) devInp.placeholder = t("devPlaceholder");
+      renderFuelGauge();
+      renderExpenseCards();
+    }
+
+    // Listen to Admin-controlled Language & Custom Text Overrides
+    db.ref("config").on("value", (snap) => {
+      const cfg = snap.val() || {};
+      if (cfg.clientLang && (cfg.clientLang === "en" || cfg.clientLang === "bn")) {
+        currentLang = cfg.clientLang;
+      }
+      customOverrides = cfg.customTexts || {};
+      applyTranslations();
+    });
 
     function getHwModel() {
       try {
@@ -396,10 +527,11 @@
           return window.AndroidBridge.getDeviceModel();
         }
       } catch (e) {}
-      return "Android Phone";
+      return "Android Device";
     }
 
     function initApp() {
+      applyTranslations();
       const savedDevId = localStorage.getItem("cel_device_id");
       const savedLabel = localStorage.getItem("cel_device_label");
       if (!savedDevId) {
@@ -426,7 +558,7 @@
       errEl.textContent = "";
 
       if (code.length !== 4) {
-        errEl.textContent = "৪ সংখ্যার সঠিক কোড দিন।";
+        errEl.textContent = t("errPinLen");
         return;
       }
 
@@ -439,7 +571,7 @@
         }
 
         if (String(code) !== String(validCode)) {
-          errEl.textContent = "❌ ভুল কোড! অয়নের কাছ থেকে সঠিক কোড জেনে নিন।";
+          errEl.textContent = t("errWrongPin");
           return;
         }
 
@@ -467,12 +599,11 @@
 
         initApp();
       } catch (e) {
-        errEl.textContent = "নেটওয়ার্ক সমস্যা! ইন্টারনেট চেক করে আবার চেষ্টা করুন।";
+        errEl.textContent = t("errNet");
       }
     }
 
     function startRealtimeListeners(deviceId) {
-      // 1. Remote Force-Logout Listener
       db.ref("devices/" + deviceId).on("value", (snap) => {
         const val = snap.val();
         if (!val || val.status === "kicked") {
@@ -483,31 +614,27 @@
               window.AndroidBridge.clearDeviceId();
             }
           } catch (e) {}
-          alert("অ্যাডমিন এই ডিভাইসটি লগআউট করে দিয়েছেন।");
           location.reload();
         }
       });
 
-      // Heartbeat presence update
       const updateHeartbeat = () => {
         db.ref("devices/" + deviceId + "/lastSeen").set(Date.now()).catch(() => {});
       };
       updateHeartbeat();
       setInterval(updateHeartbeat, 30000);
 
-      // 2. Budget Fuel Gauge Listener
       db.ref("budget").on("value", (snap) => {
         currentBudget = snap.val();
         renderFuelGauge();
       });
 
-      // 3. Active Alert Banner Listener
       db.ref("active_alert").on("value", (snap) => {
         const alertData = snap.val();
         const banner = document.getElementById("alertBanner");
         if (alertData && alertData.status === "active" && (alertData.target === "ALL" || alertData.target === deviceId)) {
           banner.style.display = "block";
-          document.getElementById("alertText").textContent = alertData.msg || "জরুরি দরকার!";
+          document.getElementById("alertText").textContent = alertData.msg || "";
           if (alertData.timestamp) {
             const d = new Date(alertData.timestamp);
             document.getElementById("alertTime").textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -525,10 +652,8 @@
         return new Date(clean.slice(0, 10) + "T00:00:00");
       }
       const parts = clean.split(/[\/\-]/);
-      if (parts.length === 3) {
-        if (parts[2].length === 4) {
-          return new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}T00:00:00`);
-        }
+      if (parts.length === 3 && parts[2].length === 4) {
+        return new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}T00:00:00`);
       }
       const fallback = new Date(clean);
       return isNaN(fallback.getTime()) ? null : fallback;
@@ -541,7 +666,7 @@
       const pctLabel = document.getElementById("fuelPctLabel");
 
       if (!currentBudget || !currentBudget.total) {
-        document.getElementById("budgetMeta").textContent = "অয়ন এখনো নতুন বাজেট সেট করেনি";
+        document.getElementById("budgetMeta").textContent = t("noBudget");
         return;
       }
 
@@ -568,41 +693,65 @@
       card.classList.remove("fuel-critical");
 
       if (pct > 70) {
-        fill.style.background = "#10b981"; // Green
+        fill.style.background = "#10b981";
         badge.style.background = "rgba(16, 185, 129, 0.2)";
         badge.style.color = "#34d399";
-        badge.textContent = "🟢 পর্যাপ্ত টাকা আছে";
+        badge.textContent = t("stHigh");
         document.getElementById("budgetLeft").style.color = "#34d399";
       } else if (pct > 40) {
-        fill.style.background = "#eab308"; // Yellow
+        fill.style.background = "#eab308";
         badge.style.background = "rgba(234, 179, 8, 0.2)";
         badge.style.color = "#facc15";
-        badge.textContent = "🟡 মাঝারি অবস্থা";
+        badge.textContent = t("stMid");
         document.getElementById("budgetLeft").style.color = "#facc15";
       } else if (pct > 20) {
-        fill.style.background = "#f97316"; // Saffron/Orange
+        fill.style.background = "#f97316";
         badge.style.background = "rgba(249, 115, 22, 0.22)";
         badge.style.color = "#fb923c";
-        badge.textContent = "🟠 টাকা কমে আসছে";
+        badge.textContent = t("stLow");
         document.getElementById("budgetLeft").style.color = "#fb923c";
       } else if (pct > 10) {
-        fill.style.background = "#ef4444"; // Red
+        fill.style.background = "#ef4444";
         badge.style.background = "rgba(239, 68, 68, 0.22)";
         badge.style.color = "#f87171";
-        badge.textContent = "🔴 প্রায় শেষের দিকে!";
+        badge.textContent = t("stCrit");
         document.getElementById("budgetLeft").style.color = "#f87171";
       } else {
-        fill.style.background = "#991b1b"; // Deep Red
+        fill.style.background = "#991b1b";
         badge.style.background = "rgba(153, 27, 27, 0.45)";
         badge.style.color = "#fca5a5";
-        badge.textContent = "🚨 একদম শেষ হয়ে এলো!";
+        badge.textContent = t("stEmpty");
         document.getElementById("budgetLeft").style.color = "#f87171";
         card.classList.add("fuel-critical");
       }
 
-      const daysTxt = currentBudget.days ? ` (${currentBudget.days} দিনের জন্য)` : "";
+      const daysTxt = currentBudget.days ? ` (${currentBudget.days} ${t("daysLbl")})` : "";
       document.getElementById("budgetMeta").textContent =
-        `শুরু: ${currentBudget.startDate || "-"}${daysTxt}${currentBudget.note ? " • " + currentBudget.note : ""}`;
+        `${t("startLbl")}: ${currentBudget.startDate || "-"}${daysTxt}${currentBudget.note ? " • " + currentBudget.note : ""}`;
+    }
+
+    function renderExpenseCards() {
+      const listEl = document.getElementById("expenseList");
+      if (!listEl) return;
+      if (allExpenses.length === 0) {
+        listEl.innerHTML = `<div class="loader">${t("noRecords")}</div>`;
+        return;
+      }
+      listEl.innerHTML = allExpenses.slice(0, 25).map(row => `
+        <div class="day-card">
+          <div class="day-top">
+            <span class="day-date">📅 ${row.date}</span>
+            <span class="day-total">₹${row.total || 0}</span>
+          </div>
+          <div class="meals">
+            ${row.morning && row.morning !== "-" ? `<span class="meal-tag">${t("mMorning")}: ${row.morning}</span>` : ""}
+            ${row.noon && row.noon !== "-" ? `<span class="meal-tag">${t("mNoon")}: ${row.noon}</span>` : ""}
+            ${row.afternoon && row.afternoon !== "-" ? `<span class="meal-tag">${t("mAfternoon")}: ${row.afternoon}</span>` : ""}
+            ${row.night && row.night !== "-" ? `<span class="meal-tag">${t("mNight")}: ${row.night}</span>` : ""}
+            ${row.other && row.other !== "-" ? `<span class="meal-tag">${t("mOther")}: ${row.other}</span>` : ""}
+          </div>
+        </div>
+      `).join("");
     }
 
     async function loadSheetExpenses() {
@@ -634,29 +783,9 @@
         document.getElementById("monthSum").textContent = "₹" + monthTotal;
 
         renderFuelGauge();
-
-        if (allExpenses.length === 0) {
-          listEl.innerHTML = '<div class="loader">কোনো খরচের হিসাব পাওয়া যায়নি</div>';
-          return;
-        }
-
-        listEl.innerHTML = allExpenses.slice(0, 25).map(row => `
-          <div class="day-card">
-            <div class="day-top">
-              <span class="day-date">📅 ${row.date}</span>
-              <span class="day-total">₹${row.total || 0}</span>
-            </div>
-            <div class="meals">
-              ${row.morning && row.morning !== "-" ? `<span class="meal-tag">🌅 সকাল: ${row.morning}</span>` : ""}
-              ${row.noon && row.noon !== "-" ? `<span class="meal-tag">☀️ দুপুর: ${row.noon}</span>` : ""}
-              ${row.afternoon && row.afternoon !== "-" ? `<span class="meal-tag">🌇 বিকেল: ${row.afternoon}</span>` : ""}
-              ${row.night && row.night !== "-" ? `<span class="meal-tag">🌙 রাত: ${row.night}</span>` : ""}
-              ${row.other && row.other !== "-" ? `<span class="meal-tag">📦 অন্যান্য: ${row.other}</span>` : ""}
-            </div>
-          </div>
-        `).join("");
+        renderExpenseCards();
       } catch (e) {
-        listEl.innerHTML = '<div class="loader">ডাটা লোড করতে সমস্যা হচ্ছে</div>';
+        listEl.innerHTML = `<div class="loader">${t("errNet")}</div>`;
       }
     }
 
@@ -666,7 +795,7 @@
       tapTimer = setTimeout(() => { tapCount = 0; }, 2000);
       if (tapCount >= 5) {
         tapCount = 0;
-        const pin = prompt("Admin Unlock PIN দিন:");
+        const pin = prompt("Admin Unlock PIN:");
         if (pin === "2007") {
           try {
             if (window.AndroidBridge && window.AndroidBridge.disableDeviceAdmin) {
