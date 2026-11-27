@@ -1,442 +1,683 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="bn">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Campus Expense Live</title>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+  <script src="firebase-config.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <style>
     :root {
       --bg: #0b0914;
-      --surface: #151226;
-      --surface-2: #1f1b36;
-      --border: rgba(255, 255, 255, 0.08);
-      --primary: #f59e0b;
-      --accent: #8b5cf6;
+      --card: #151226;
+      --card-border: rgba(255, 255, 255, 0.08);
       --text: #f8fafc;
       --muted: #94a3b8;
+      --accent: #a855f7;
     }
-
-    body.light-mode {
-      --bg: #f1f5f9;
-      --surface: #ffffff;
-      --surface-2: #e2e8f0;
-      --border: rgba(15, 23, 42, 0.1);
-      --primary: #d97706;
-      --accent: #7c3aed;
-      --text: #0f172a;
-      --muted: #475569;
-    }
-
-    * { box-sizing: border-box; font-family: 'Plus Jakarta Sans', sans-serif; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     body {
+      font-family: 'Plus Jakarta Sans', 'Hind Siliguri', sans-serif;
       background: var(--bg);
       color: var(--text);
-      padding: 14px 14px 36px;
       min-height: 100vh;
-      transition: background 0.25s, color 0.25s;
+      padding: 16px 14px 40px;
     }
-    .container { max-width: 780px; margin: 0 auto; }
+    .container { max-width: 480px; margin: 0 auto; }
 
-    /* Top Bar */
-    .topbar {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 12px 16px; background: var(--surface);
-      border: 1px solid var(--border); border-radius: 20px;
-      margin-bottom: 14px; position: sticky; top: 10px; z-index: 50;
-      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
-    }
-    .brand { display: flex; align-items: center; gap: 11px; user-select: none; }
-    .logo-box {
-      width: 40px; height: 40px; border-radius: 13px;
-      background: linear-gradient(135deg, #f59e0b, #8b5cf6);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 19px; color: #fff; font-weight: 800;
-      flex-shrink: 0;
-    }
-    .app-name { font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 700; }
-    .student-tag { font-size: 11px; font-weight: 700; color: var(--primary); margin-top: 1px; }
-    .app-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
-
-    .theme-btn {
-      background: var(--surface-2); border: 1px solid var(--border);
-      color: var(--text); padding: 8px 13px; border-radius: 12px;
-      font-size: 12px; font-weight: 700; cursor: pointer;
-      display: flex; align-items: center; gap: 6px;
-      flex-shrink: 0;
-    }
-
-    /* Highlighted Message Banner from Ayan */
-    .notice-banner {
+    /* Login Screen */
+    #loginScreen {
       display: none;
-      background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(139, 92, 246, 0.18));
-      border: 1px solid rgba(245, 158, 11, 0.45);
-      border-radius: 18px;
-      padding: 14px 16px;
-      margin-bottom: 14px;
+      min-height: 88vh;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
     }
-    .notice-banner.show { display: block; }
-    .notice-top {
-      display: flex; justify-content: space-between; align-items: center;
-      font-size: 11px; font-weight: 800; color: var(--primary);
-      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 5px;
+    .login-box {
+      width: 100%;
+      background: var(--card);
+      border: 1px solid rgba(168, 85, 247, 0.35);
+      border-radius: 24px;
+      padding: 28px 22px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
     }
-    .notice-text { font-size: 14px; font-weight: 700; line-height: 1.45; }
-
-    /* Summary Card */
-    .hero {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 22px; padding: 18px; margin-bottom: 14px;
+    .login-icon { font-size: 46px; margin-bottom: 10px; }
+    .login-title { font-size: 22px; font-weight: 800; color: #fff; }
+    .login-sub { font-size: 13px; color: var(--muted); margin: 6px 0 22px; }
+    .input-group { text-align: left; margin-bottom: 14px; }
+    .input-group label { display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 6px; font-weight: 600; }
+    .input-field {
+      width: 100%;
+      background: #0d0a1a;
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 14px;
+      padding: 13px 14px;
+      color: #fff;
+      font-size: 15px;
+      outline: none;
     }
-    .hero-top { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 14px; }
-    .lbl-sm { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); font-weight: 700; }
-    .big-num { font-family: 'Outfit', sans-serif; font-size: 32px; font-weight: 800; color: var(--primary); margin-top: 2px; }
-    .kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .kpi {
-      background: var(--surface-2); border-radius: 14px; padding: 10px;
+    .code-input {
+      text-align: center;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 10px;
     }
-    .kpi span { display: block; font-size: 10px; color: var(--muted); font-weight: 600; }
-    .kpi strong { font-family: 'Outfit', sans-serif; font-size: 15px; margin-top: 3px; display: block; }
-
-    /* Week Navigation */
-    .week-nav {
-      display: flex; justify-content: space-between; align-items: center;
-      background: var(--surface); padding: 10px 12px; border-radius: 16px;
-      border: 1px solid var(--border); margin-bottom: 12px; gap: 8px;
-    }
-    .nav-btn {
-      background: var(--surface-2); color: var(--text); border: none;
-      padding: 8px 13px; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer;
-    }
-    .current-wk-btn {
-      background: rgba(139, 92, 246, 0.18);
-      color: var(--accent);
-      border: 1px solid rgba(139, 92, 246, 0.35);
-      padding: 6px 12px;
-      border-radius: 10px;
-      font-size: 11px;
+    .btn-primary {
+      width: 100%;
+      margin-top: 8px;
+      background: linear-gradient(135deg, #9333ea, #6366f1);
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      padding: 14px;
+      font-size: 16px;
       font-weight: 700;
       cursor: pointer;
     }
+    .login-err { color: #f87171; font-size: 13px; margin-top: 12px; min-height: 18px; }
 
-    /* Read-Only Report Cards */
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding: 4px 2px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+    .brand-logo {
+      width: 40px; height: 40px; border-radius: 12px;
+      background: linear-gradient(135deg, #9333ea, #3b82f6);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    .brand h1 { font-size: 17px; font-weight: 800; }
+    .brand p { font-size: 11px; color: #4ade80; font-weight: 600; }
+    .device-pill {
+      background: rgba(255,255,255,0.07);
+      border: 1px solid var(--card-border);
+      padding: 6px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      color: #cbd5e1;
+      max-width: 145px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Alert Banner */
+    #alertBanner {
+      display: none;
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.18));
+      border: 1px solid rgba(245, 158, 11, 0.6);
+      border-radius: 18px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+    }
+    .alert-top { display: flex; justify-content: space-between; font-size: 11px; color: #fbbf24; font-weight: 700; margin-bottom: 4px; }
+    .alert-msg { font-size: 16px; font-weight: 700; color: #fff; }
+
+    /* Car Fuel Gauge Budget Card */
+    .fuel-card {
+      background: var(--card);
+      border: 1.5px solid var(--card-border);
+      border-radius: 22px;
+      padding: 18px;
+      margin-bottom: 16px;
+      transition: all 0.4s ease;
+    }
+    @keyframes urgentPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(185, 28, 28, 0.7); border-color: #ef4444; }
+      50% { box-shadow: 0 0 22px 4px rgba(220, 38, 38, 0.55); border-color: #991b1b; }
+    }
+    .fuel-critical {
+      animation: urgentPulse 1.3s infinite;
+      background: linear-gradient(180deg, #230b10 0%, #151226 100%);
+    }
+    .fuel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .fuel-title { font-size: 14px; font-weight: 700; color: #e2e8f0; display: flex; align-items: center; gap: 6px; }
+    .fuel-badge {
+      font-size: 11px;
+      font-weight: 800;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(16, 185, 129, 0.18);
+      color: #34d399;
+    }
+    .gauge-wrapper {
+      background: #0a0812;
+      border-radius: 16px;
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,0.06);
+      margin-bottom: 14px;
+    }
+    .gauge-labels {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .label-e { color: #ef4444; }
+    .label-f { color: #10b981; }
+    .gauge-track {
+      position: relative;
+      height: 26px;
+      background: #1e1b2e;
+      border-radius: 13px;
+      overflow: hidden;
+      display: flex;
+      padding: 3px;
+      gap: 3px;
+    }
+    .gauge-fill {
+      height: 100%;
+      width: 100%;
+      border-radius: 10px;
+      transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.5s ease;
+      background: #10b981;
+      position: relative;
+    }
+    .gauge-ticks {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      padding: 0 4px;
+    }
+    .gauge-ticks span { width: 2px; height: 6px; background: rgba(255,255,255,0.2); border-radius: 2px; }
+    .fuel-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      text-align: center;
+    }
+    .f-stat {
+      background: rgba(255,255,255,0.04);
+      border-radius: 14px;
+      padding: 10px 6px;
+    }
+    .f-stat-lbl { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+    .f-stat-val { font-size: 15px; font-weight: 800; color: #fff; }
+    .fuel-meta { font-size: 11px; color: var(--muted); text-align: center; margin-top: 10px; }
+
+    /* Summary Grid */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .sum-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 14px 10px;
+      text-align: center;
+    }
+    .sum-lbl { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .sum-val { font-size: 17px; font-weight: 800; color: #fff; }
+
+    /* Expense History List */
+    .sec-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .refresh-btn {
+      background: rgba(168, 85, 247, 0.16);
+      color: #c084fc;
+      border: none;
+      padding: 5px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
     .day-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 18px; padding: 14px 16px; margin-bottom: 10px;
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
     }
-    .day-head {
-      display: flex; justify-content: space-between; align-items: center;
-      padding-bottom: 9px; margin-bottom: 9px; border-bottom: 1px solid var(--border);
+    .day-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
-    .day-date { font-weight: 700; font-size: 13px; }
-    .day-total {
-      background: rgba(245, 158, 11, 0.16); color: var(--primary);
-      padding: 4px 10px; border-radius: 8px; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 14px;
+    .day-date { font-size: 14px; font-weight: 700; color: #e2e8f0; }
+    .day-total { font-size: 16px; font-weight: 800; color: #38bdf8; }
+    .meals {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
     }
-    .meal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 12px; }
-    .meal-item { display: flex; justify-content: space-between; }
-    .meal-lbl { color: var(--muted); font-weight: 600; }
-    .meal-val { font-weight: 600; text-align: right; }
-    .other-line {
-      margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--border);
-      font-size: 12px; display: flex; justify-content: space-between;
+    .meal-tag {
+      background: rgba(255,255,255,0.05);
+      padding: 4px 9px;
+      border-radius: 10px;
+      font-size: 12px;
+      color: #cbd5e1;
     }
-
-    /* Hidden Admin Unlock Modal (5 Taps on Logo) */
-    .modal-overlay {
-      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8);
-      z-index: 9999; justify-content: center; align-items: center; padding: 20px;
-    }
-    .modal-box {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 22px; padding: 20px; width: 100%; max-width: 340px; text-align: center;
-    }
-    .pin-inp {
-      width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--border);
-      background: var(--surface-2); color: var(--text); font-size: 18px;
-      text-align: center; letter-spacing: 6px; margin: 12px 0; outline: none;
-    }
-    .btn-admin {
-      width: 100%; padding: 11px; border-radius: 12px; border: none;
-      background: #ef4444; color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; margin-bottom: 8px;
-    }
-    .btn-close {
-      width: 100%; padding: 10px; border-radius: 12px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); font-weight: 600; font-size: 12px; cursor: pointer;
-    }
+    .loader { text-align: center; color: var(--muted); padding: 30px 0; font-size: 14px; }
   </style>
 </head>
 <body>
-
-<div class="container">
-  <div class="topbar">
-    <div class="brand" onclick="handleSecretTap()">
-      <div class="logo-box">🎓</div>
-      <div>
-        <div class="app-name">Campus Expense Live</div>
-        <div class="student-tag">Ayan Karmakar</div>
-        <div class="app-sub" id="syncStatus">Syncing live report...</div>
-      </div>
-    </div>
-    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">☀️ Light</button>
-  </div>
-
-  <!-- Live Message Banner from Ayan -->
-  <div class="notice-banner" id="noticeBanner">
-    <div class="notice-top">
-      <span>🔔 Message from Ayan</span>
-      <span id="noticeTime" style="font-size:10px; opacity:0.85;"></span>
-    </div>
-    <div class="notice-text" id="noticeText"></div>
-  </div>
-
-  <div class="hero">
-    <div class="hero-top">
-      <div>
-        <div class="lbl-sm">Selected Week Total</div>
-        <div class="big-num" id="statTotal">₹0</div>
-      </div>
-      <div style="text-align:right;">
-        <div class="lbl-sm">Daily Average</div>
-        <div style="font-family:'Outfit',sans-serif; font-size:20px; font-weight:700;" id="statAvg">₹0</div>
-      </div>
-    </div>
-    <div class="kpi-row">
-      <div class="kpi">
-        <span>Active Days</span>
-        <strong id="statDays">0 Days</strong>
-      </div>
-      <div class="kpi">
-        <span>Highest Day</span>
-        <strong id="statMax">₹0</strong>
-      </div>
-      <div class="kpi">
-        <span>This Month</span>
-        <strong id="statMonth">₹0</strong>
-      </div>
-    </div>
-  </div>
-
-  <div class="week-nav">
-    <button class="nav-btn" onclick="prevWeek()">← Prev</button>
-    <div id="weekLabel" style="text-align:center; font-size:12px; font-weight:700;">Current Week</div>
-    <button class="nav-btn" onclick="nextWeek()">Next →</button>
-  </div>
-
-  <div id="reportList">
-    <div class="day-card" style="text-align:center; color:var(--muted); padding:24px;">Loading live expenses...</div>
-  </div>
-</div>
-
-<!-- Hidden Admin Control Modal (Triggered by 5 rapid taps on Logo) -->
-<div id="adminModal" class="modal-overlay">
-  <div class="modal-box">
-    <div style="font-family:'Outfit',sans-serif; font-weight:700; font-size:16px;">Admin Protection Control</div>
-    <div style="font-size:11px; color:var(--muted); margin-top:4px;">Enter PIN to unlock uninstall protection</div>
-    <input type="password" id="adminPinInput" class="pin-inp" maxlength="6" placeholder="••••">
-    <button class="btn-admin" onclick="unlockUninstallProtection()">Disable Uninstall Block</button>
-    <button class="btn-close" onclick="closeAdminModal()">Close</button>
-  </div>
-</div>
-
-<script>
-  const API_URL = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
-  let rawData = [];
-  let weekOffset = 0;
-  let lastKnownDateKey = "";
-  let tapCount = 0;
-  let tapTimer = null;
-
-  function applySavedTheme() {
-    const mode = localStorage.getItem('report_theme') || 'dark';
-    const isLight = mode === 'light';
-    document.body.classList.toggle('light-mode', isLight);
-    document.getElementById('themeBtn').innerText = isLight ? '🌙 Dark' : '☀️ Light';
-  }
-
-  function toggleTheme() {
-    const isLight = document.body.classList.toggle('light-mode');
-    localStorage.setItem('report_theme', isLight ? 'light' : 'dark');
-    document.getElementById('themeBtn').innerText = isLight ? '🌙 Dark' : '☀️ Light';
-  }
-
-  function handleSecretTap() {
-    tapCount++;
-    clearTimeout(tapTimer);
-    if (tapCount >= 5) {
-      tapCount = 0;
-      document.getElementById('adminPinInput').value = '';
-      document.getElementById('adminModal').style.display = 'flex';
-    } else {
-      tapTimer = setTimeout(() => { tapCount = 0; }, 1200);
-    }
-  }
-
-  function closeAdminModal() {
-    document.getElementById('adminModal').style.display = 'none';
-  }
-
-  function unlockUninstallProtection() {
-    const pin = document.getElementById('adminPinInput').value.trim();
-    if (pin === "2007") {
-      closeAdminModal();
-      if (window.AndroidBridge && window.AndroidBridge.disableDeviceAdmin) {
-        window.AndroidBridge.disableDeviceAdmin();
-      } else {
-        alert("Protection disabled. You can now uninstall from Settings.");
-      }
-    } else {
-      alert("Wrong PIN");
-    }
-  }
-
-  function getTodayKey() {
-    const now = new Date();
-    return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-  }
-
-  function autoSyncWeekWithDate() {
-    const todayKey = getTodayKey();
-    if (lastKnownDateKey && lastKnownDateKey !== todayKey) {
-      weekOffset = 0;
-      renderReport();
-    }
-    lastKnownDateKey = todayKey;
-  }
-
-  function parseEntryDate(dateStr) {
-    const datePart = String(dateStr || '').split(' ')[0];
-    const parts = datePart.split('/');
-    if (parts.length !== 3) return new Date(0);
-    return new Date(parts[2], parts[1] - 1, parts[0]);
-  }
-
-  function getCalendarWeekRange(offset) {
-    const now = new Date();
-    const day = now.getDay();
-    const diffToMon = now.getDate() - day + (day === 0 ? -6 : 1) + (offset * 7);
-    const start = new Date(now.getFullYear(), now.getMonth(), diffToMon);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    end.setHours(23, 59, 59, 999);
-    return { start, end };
-  }
-
-  function formatDateShort(d) {
-    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-  }
-
-  function prevWeek() { weekOffset--; renderReport(); }
-  function nextWeek() { weekOffset++; renderReport(); }
-  function goToCurrentWeek() { weekOffset = 0; renderReport(); }
-
-  async function fetchLiveReport() {
-    autoSyncWeekWithDate();
-    try {
-      const res = await fetch(API_URL);
-      const allRows = await res.json();
-
-      // Check for active message banner from Ayan
-      const alertRow = allRows.find(r => String(r.date || '').includes("2099"));
-      const banner = document.getElementById('noticeBanner');
-      if (alertRow && alertRow.morning === "RING" && alertRow.noon && alertRow.noon !== "-") {
-        document.getElementById('noticeText').innerText = alertRow.noon;
-        document.getElementById('noticeTime').innerText = (alertRow.night && alertRow.night !== "-") ? alertRow.night : "";
-        banner.classList.add('show');
-      } else {
-        banner.classList.remove('show');
-      }
-
-      rawData = allRows.filter(r => !String(r.date || '').includes("2099") && r.date !== "__SYS_CMD__");
-
-      const now = new Date();
-      const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-      const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-      document.getElementById('syncStatus').innerText = `Live • ${dateStr}, ${timeStr}`;
-      renderReport();
-    } catch (e) {
-      document.getElementById('syncStatus').innerText = "Offline • Check Internet";
-    }
-  }
-
-  function renderReport() {
-    const list = document.getElementById('reportList');
-    const range = getCalendarWeekRange(weekOffset);
-    const rangeText = `${formatDateShort(range.start)} - ${formatDateShort(range.end)}`;
-
-    if (weekOffset === 0) {
-      document.getElementById('weekLabel').innerHTML = `Current Week<br><span style="font-size:10px; color:var(--muted);">${rangeText}</span>`;
-    } else {
-      document.getElementById('weekLabel').innerHTML = `
-        <button class="current-wk-btn" onclick="goToCurrentWeek()">↺ Go to Current Week</button>
-        <div style="font-size:10px; color:var(--muted); margin-top:3px;">${rangeText}</div>
-      `;
-    }
-
-    const now = new Date();
-    const monthTotal = rawData.reduce((acc, r) => {
-      const d = parseEntryDate(r.date);
-      return (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) ? acc + r.total : acc;
-    }, 0);
-    document.getElementById('statMonth').innerText = `₹${monthTotal}`;
-
-    const rows = rawData.filter(r => {
-      const d = parseEntryDate(r.date);
-      return d >= range.start && d <= range.end;
-    }).sort((a, b) => parseEntryDate(b.date) - parseEntryDate(a.date));
-
-    if (rows.length === 0) {
-      list.innerHTML = `<div class="day-card" style="text-align:center; color:var(--muted); padding:24px;">No expenses logged for this week.</div>`;
-      document.getElementById('statTotal').innerText = "₹0";
-      document.getElementById('statAvg').innerText = "₹0";
-      document.getElementById('statDays').innerText = "0 Days";
-      document.getElementById('statMax').innerText = "₹0";
-      return;
-    }
-
-    let total = 0, max = 0;
-    list.innerHTML = '';
-    rows.forEach(r => {
-      total += r.total;
-      if (r.total > max) max = r.total;
-
-      const card = document.createElement('div');
-      card.className = 'day-card';
-      card.innerHTML = `
-        <div class="day-head">
-          <span class="day-date">${r.date}</span>
-          <span class="day-total">₹${r.total}</span>
+  <div class="container">
+    <!-- 4-Digit Login Gate -->
+    <div id="loginScreen">
+      <div class="login-box">
+        <div class="login-icon">🔐</div>
+        <div class="login-title">Campus Expense Live</div>
+        <div class="login-sub">অয়ন (Ayan)-এর বানানো ৪-ডিজিট অ্যাক্সেস কোড দিয়ে লগইন করুন</div>
+        <div class="input-group">
+          <label>ডিভাইসের নাম (যেমন: বাবার ফোন / দাদার ফোন)</label>
+          <input type="text" id="deviceLabelInput" class="input-field" placeholder="বাবার ফোন" />
         </div>
-        <div class="meal-grid">
-          <div class="meal-item"><span class="meal-lbl">Morning:</span><span class="meal-val">${r.morning}</span></div>
-          <div class="meal-item"><span class="meal-lbl">Noon:</span><span class="meal-val">${r.noon}</span></div>
-          <div class="meal-item"><span class="meal-lbl">Afternoon:</span><span class="meal-val">${r.afternoon}</span></div>
-          <div class="meal-item"><span class="meal-lbl">Night:</span><span class="meal-val">${r.night}</span></div>
+        <div class="input-group">
+          <label>৪-ডিজিট অ্যাক্সেস কোড</label>
+          <input type="tel" id="accessCodeInput" maxlength="4" class="input-field code-input" placeholder="••••" />
         </div>
-        ${r.other && r.other !== "-" ? `<div class="other-line"><span class="meal-lbl">Other:</span><span class="meal-val">${r.other}</span></div>` : ''}
-      `;
-      list.appendChild(card);
-    });
+        <button class="btn-primary" onclick="verifyLogin()">লগইন করুন</button>
+        <div class="login-err" id="loginError"></div>
+      </div>
+    </div>
 
-    document.getElementById('statTotal').innerText = `₹${total}`;
-    document.getElementById('statAvg').innerText = `₹${Math.round(total / rows.length)}`;
-    document.getElementById('statDays').innerText = `${rows.length} Days`;
-    document.getElementById('statMax').innerText = `₹${max}`;
-  }
+    <!-- Main Dashboard -->
+    <div id="mainApp" style="display:none;">
+      <div class="header">
+        <div class="brand" onclick="handleSecretTap()">
+          <div class="brand-logo">🎓</div>
+          <div>
+            <h1>Campus Expense</h1>
+            <p>● Live Sync Active</p>
+          </div>
+        </div>
+        <div class="device-pill" id="deviceBadge">📱 Connected</div>
+      </div>
 
-  window.onload = () => {
-    lastKnownDateKey = getTodayKey();
-    applySavedTheme();
-    fetchLiveReport();
-    setInterval(fetchLiveReport, 15000);
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) {
-        weekOffset = 0;
-        fetchLiveReport();
+      <!-- Active Alert Banner -->
+      <div id="alertBanner">
+        <div class="alert-top">
+          <span>🔔 অয়নের জরুরি মেসেজ</span>
+          <span id="alertTime">এখনই</span>
+        </div>
+        <div class="alert-msg" id="alertText"></div>
+      </div>
+
+      <!-- Car Fuel Gauge Budget Meter -->
+      <div class="fuel-card" id="fuelCard">
+        <div class="fuel-header">
+          <div class="fuel-title">⛽ পকেটমানি ফুয়েল মিটার</div>
+          <div class="fuel-badge" id="fuelStatusBadge">100% FULL</div>
+        </div>
+        <div class="gauge-wrapper">
+          <div class="gauge-labels">
+            <span class="label-e">E (শেষ)</span>
+            <span id="fuelPctLabel" style="color:#fff;">--%</span>
+            <span class="label-f">F (ফুল)</span>
+          </div>
+          <div class="gauge-track">
+            <div class="gauge-fill" id="fuelFillBar"></div>
+          </div>
+          <div class="gauge-ticks">
+            <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+        <div class="fuel-stats">
+          <div class="f-stat">
+            <div class="f-stat-lbl">মোট বাজেট</div>
+            <div class="f-stat-val" id="budgetTotal">₹0</div>
+          </div>
+          <div class="f-stat">
+            <div class="f-stat-lbl">খরচ হয়েছে</div>
+            <div class="f-stat-val" id="budgetSpent" style="color:#fbbf24;">₹0</div>
+          </div>
+          <div class="f-stat">
+            <div class="f-stat-lbl">বাকি আছে</div>
+            <div class="f-stat-val" id="budgetLeft" style="color:#34d399;">₹0</div>
+          </div>
+        </div>
+        <div class="fuel-meta" id="budgetMeta">বাজেট লোড হচ্ছে...</div>
+      </div>
+
+      <!-- Quick Summaries -->
+      <div class="summary-grid">
+        <div class="sum-card">
+          <div class="sum-lbl">আজকের খরচ</div>
+          <div class="sum-val" id="todaySum">₹0</div>
+        </div>
+        <div class="sum-card">
+          <div class="sum-lbl">গত ৭ দিন</div>
+          <div class="sum-val" id="weekSum">₹0</div>
+        </div>
+        <div class="sum-card">
+          <div class="sum-lbl">এই মাস</div>
+          <div class="sum-val" id="monthSum">₹0</div>
+        </div>
+      </div>
+
+      <div class="sec-title">
+        <span>📊 দৈনিক খরচের হিসাব</span>
+        <button class="refresh-btn" onclick="loadSheetExpenses()">↻ রিফ্রেশ</button>
+      </div>
+      <div id="expenseList"><div class="loader">হিসাব লোড হচ্ছে...</div></div>
+    </div>
+  </div>
+
+  <script>
+    firebase.initializeApp(window.APP_CONFIG.firebaseConfig);
+    const db = firebase.database();
+
+    let allExpenses = [];
+    let currentBudget = null;
+    let tapCount = 0;
+    let tapTimer = null;
+
+    function getHwModel() {
+      try {
+        if (window.AndroidBridge && window.AndroidBridge.getDeviceModel) {
+          return window.AndroidBridge.getDeviceModel();
+        }
+      } catch (e) {}
+      return "Android Phone";
+    }
+
+    function initApp() {
+      const savedDevId = localStorage.getItem("cel_device_id");
+      const savedLabel = localStorage.getItem("cel_device_label");
+      if (!savedDevId) {
+        document.getElementById("loginScreen").style.display = "flex";
+        document.getElementById("mainApp").style.display = "none";
+      } else {
+        document.getElementById("loginScreen").style.display = "none";
+        document.getElementById("mainApp").style.display = "block";
+        document.getElementById("deviceBadge").textContent = "📱 " + (savedLabel || getHwModel());
+        try {
+          if (window.AndroidBridge && window.AndroidBridge.setDeviceId) {
+            window.AndroidBridge.setDeviceId(savedDevId, savedLabel || getHwModel());
+          }
+        } catch (e) {}
+        startRealtimeListeners(savedDevId);
+        loadSheetExpenses();
       }
-    });
-  };
-</script>
+    }
+
+    async function verifyLogin() {
+      const code = document.getElementById("accessCodeInput").value.trim();
+      const customLabel = document.getElementById("deviceLabelInput").value.trim();
+      const errEl = document.getElementById("loginError");
+      errEl.textContent = "";
+
+      if (code.length !== 4) {
+        errEl.textContent = "৪ সংখ্যার সঠিক কোড দিন।";
+        return;
+      }
+
+      try {
+        const snap = await db.ref("config/accessCode").once("value");
+        let validCode = snap.val();
+        if (!validCode) {
+          validCode = "2007";
+          await db.ref("config/accessCode").set("2007");
+        }
+
+        if (String(code) !== String(validCode)) {
+          errEl.textContent = "❌ ভুল কোড! অয়নের কাছ থেকে সঠিক কোড জেনে নিন।";
+          return;
+        }
+
+        const hwModel = getHwModel();
+        const finalLabel = customLabel || hwModel;
+        const deviceId = "dev_" + Date.now() + "_" + Math.floor(100 + Math.random() * 900);
+
+        await db.ref("devices/" + deviceId).set({
+          id: deviceId,
+          model: hwModel,
+          label: finalLabel,
+          loginTime: Date.now(),
+          lastSeen: Date.now(),
+          status: "active"
+        });
+
+        localStorage.setItem("cel_device_id", deviceId);
+        localStorage.setItem("cel_device_label", finalLabel);
+
+        try {
+          if (window.AndroidBridge && window.AndroidBridge.setDeviceId) {
+            window.AndroidBridge.setDeviceId(deviceId, finalLabel);
+          }
+        } catch (e) {}
+
+        initApp();
+      } catch (e) {
+        errEl.textContent = "নেটওয়ার্ক সমস্যা! ইন্টারনেট চেক করে আবার চেষ্টা করুন।";
+      }
+    }
+
+    function startRealtimeListeners(deviceId) {
+      // 1. Remote Force-Logout Listener
+      db.ref("devices/" + deviceId).on("value", (snap) => {
+        const val = snap.val();
+        if (!val || val.status === "kicked") {
+          localStorage.removeItem("cel_device_id");
+          localStorage.removeItem("cel_device_label");
+          try {
+            if (window.AndroidBridge && window.AndroidBridge.clearDeviceId) {
+              window.AndroidBridge.clearDeviceId();
+            }
+          } catch (e) {}
+          alert("অ্যাডমিন এই ডিভাইসটি লগআউট করে দিয়েছেন।");
+          location.reload();
+        }
+      });
+
+      // Heartbeat presence update
+      const updateHeartbeat = () => {
+        db.ref("devices/" + deviceId + "/lastSeen").set(Date.now()).catch(() => {});
+      };
+      updateHeartbeat();
+      setInterval(updateHeartbeat, 30000);
+
+      // 2. Budget Fuel Gauge Listener
+      db.ref("budget").on("value", (snap) => {
+        currentBudget = snap.val();
+        renderFuelGauge();
+      });
+
+      // 3. Active Alert Banner Listener
+      db.ref("active_alert").on("value", (snap) => {
+        const alertData = snap.val();
+        const banner = document.getElementById("alertBanner");
+        if (alertData && alertData.status === "active" && (alertData.target === "ALL" || alertData.target === deviceId)) {
+          banner.style.display = "block";
+          document.getElementById("alertText").textContent = alertData.msg || "জরুরি দরকার!";
+          if (alertData.timestamp) {
+            const d = new Date(alertData.timestamp);
+            document.getElementById("alertTime").textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          }
+        } else {
+          banner.style.display = "none";
+        }
+      });
+    }
+
+    function parseSheetDate(dateStr) {
+      if (!dateStr) return null;
+      const clean = String(dateStr).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
+        return new Date(clean.slice(0, 10) + "T00:00:00");
+      }
+      const parts = clean.split(/[\/\-]/);
+      if (parts.length === 3) {
+        if (parts[2].length === 4) {
+          return new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}T00:00:00`);
+        }
+      }
+      const fallback = new Date(clean);
+      return isNaN(fallback.getTime()) ? null : fallback;
+    }
+
+    function renderFuelGauge() {
+      const card = document.getElementById("fuelCard");
+      const fill = document.getElementById("fuelFillBar");
+      const badge = document.getElementById("fuelStatusBadge");
+      const pctLabel = document.getElementById("fuelPctLabel");
+
+      if (!currentBudget || !currentBudget.total) {
+        document.getElementById("budgetMeta").textContent = "অয়ন এখনো নতুন বাজেট সেট করেনি";
+        return;
+      }
+
+      const total = Number(currentBudget.total) || 0;
+      const startObj = parseSheetDate(currentBudget.startDate);
+
+      let spent = 0;
+      allExpenses.forEach(item => {
+        const dObj = parseSheetDate(item.date);
+        if (!startObj || (dObj && dObj >= startObj)) {
+          spent += Number(item.total) || 0;
+        }
+      });
+
+      const remaining = Math.max(0, total - spent);
+      const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((remaining / total) * 100))) : 0;
+
+      document.getElementById("budgetTotal").textContent = "₹" + total;
+      document.getElementById("budgetSpent").textContent = "₹" + spent;
+      document.getElementById("budgetLeft").textContent = spent > total ? "-₹" + (spent - total) : "₹" + remaining;
+      pctLabel.textContent = pct + "%";
+      fill.style.width = Math.max(4, pct) + "%";
+
+      card.classList.remove("fuel-critical");
+
+      if (pct > 70) {
+        fill.style.background = "#10b981"; // Green
+        badge.style.background = "rgba(16, 185, 129, 0.2)";
+        badge.style.color = "#34d399";
+        badge.textContent = "🟢 পর্যাপ্ত টাকা আছে";
+        document.getElementById("budgetLeft").style.color = "#34d399";
+      } else if (pct > 40) {
+        fill.style.background = "#eab308"; // Yellow
+        badge.style.background = "rgba(234, 179, 8, 0.2)";
+        badge.style.color = "#facc15";
+        badge.textContent = "🟡 মাঝারি অবস্থা";
+        document.getElementById("budgetLeft").style.color = "#facc15";
+      } else if (pct > 20) {
+        fill.style.background = "#f97316"; // Saffron/Orange
+        badge.style.background = "rgba(249, 115, 22, 0.22)";
+        badge.style.color = "#fb923c";
+        badge.textContent = "🟠 টাকা কমে আসছে";
+        document.getElementById("budgetLeft").style.color = "#fb923c";
+      } else if (pct > 10) {
+        fill.style.background = "#ef4444"; // Red
+        badge.style.background = "rgba(239, 68, 68, 0.22)";
+        badge.style.color = "#f87171";
+        badge.textContent = "🔴 প্রায় শেষের দিকে!";
+        document.getElementById("budgetLeft").style.color = "#f87171";
+      } else {
+        fill.style.background = "#991b1b"; // Deep Red
+        badge.style.background = "rgba(153, 27, 27, 0.45)";
+        badge.style.color = "#fca5a5";
+        badge.textContent = "🚨 একদম শেষ হয়ে এলো!";
+        document.getElementById("budgetLeft").style.color = "#f87171";
+        card.classList.add("fuel-critical");
+      }
+
+      const daysTxt = currentBudget.days ? ` (${currentBudget.days} দিনের জন্য)` : "";
+      document.getElementById("budgetMeta").textContent =
+        `শুরু: ${currentBudget.startDate || "-"}${daysTxt}${currentBudget.note ? " • " + currentBudget.note : ""}`;
+    }
+
+    async function loadSheetExpenses() {
+      const listEl = document.getElementById("expenseList");
+      try {
+        const res = await fetch(window.APP_CONFIG.sheetApiUrl);
+        const raw = await res.json();
+        allExpenses = raw.filter(r => r.date && !String(r.date).includes("2099")).reverse();
+
+        const now = new Date();
+        const todayStr = now.toISOString().slice(0, 10);
+        let todayTotal = 0, weekTotal = 0, monthTotal = 0;
+
+        allExpenses.forEach(row => {
+          const val = Number(row.total) || 0;
+          const dObj = parseSheetDate(row.date);
+          if (String(row.date).includes(todayStr) || (dObj && dObj.toDateString() === now.toDateString())) {
+            todayTotal += val;
+          }
+          if (dObj) {
+            const diffDays = (now - dObj) / (1000 * 60 * 60 * 24);
+            if (diffDays <= 7 && diffDays >= -1) weekTotal += val;
+            if (dObj.getMonth() === now.getMonth() && dObj.getFullYear() === now.getFullYear()) monthTotal += val;
+          }
+        });
+
+        document.getElementById("todaySum").textContent = "₹" + todayTotal;
+        document.getElementById("weekSum").textContent = "₹" + weekTotal;
+        document.getElementById("monthSum").textContent = "₹" + monthTotal;
+
+        renderFuelGauge();
+
+        if (allExpenses.length === 0) {
+          listEl.innerHTML = '<div class="loader">কোনো খরচের হিসাব পাওয়া যায়নি</div>';
+          return;
+        }
+
+        listEl.innerHTML = allExpenses.slice(0, 25).map(row => `
+          <div class="day-card">
+            <div class="day-top">
+              <span class="day-date">📅 ${row.date}</span>
+              <span class="day-total">₹${row.total || 0}</span>
+            </div>
+            <div class="meals">
+              ${row.morning && row.morning !== "-" ? `<span class="meal-tag">🌅 সকাল: ${row.morning}</span>` : ""}
+              ${row.noon && row.noon !== "-" ? `<span class="meal-tag">☀️ দুপুর: ${row.noon}</span>` : ""}
+              ${row.afternoon && row.afternoon !== "-" ? `<span class="meal-tag">🌇 বিকেল: ${row.afternoon}</span>` : ""}
+              ${row.night && row.night !== "-" ? `<span class="meal-tag">🌙 রাত: ${row.night}</span>` : ""}
+              ${row.other && row.other !== "-" ? `<span class="meal-tag">📦 অন্যান্য: ${row.other}</span>` : ""}
+            </div>
+          </div>
+        `).join("");
+      } catch (e) {
+        listEl.innerHTML = '<div class="loader">ডাটা লোড করতে সমস্যা হচ্ছে</div>';
+      }
+    }
+
+    function handleSecretTap() {
+      tapCount++;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(() => { tapCount = 0; }, 2000);
+      if (tapCount >= 5) {
+        tapCount = 0;
+        const pin = prompt("Admin Unlock PIN দিন:");
+        if (pin === "2007") {
+          try {
+            if (window.AndroidBridge && window.AndroidBridge.disableDeviceAdmin) {
+              window.AndroidBridge.disableDeviceAdmin();
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    initApp();
+  </script>
 </body>
 </html>
