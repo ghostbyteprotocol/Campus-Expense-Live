@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject Custom Audio + Remote Volume Control
+      - name: Build Capacitor & Inject Instant Firebase Expense Notification + Custom Ring
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -78,7 +78,7 @@ jobs:
           }
           EOF
 
-          # 2. Full-Screen Alert Activity with Custom Audio & Remote Volume Control
+          # 2. Full-Screen Alert Activity
           cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
           package com.ayan.expenselive;
 
@@ -355,7 +355,7 @@ jobs:
           }
           EOF
 
-          # 3. Persistent Firebase Realtime Monitor Service (Downloads Per-Device Custom Audio + Volume)
+          # 3. Persistent Firebase Realtime Monitor Service (4s Alert + 4s Instant Expense Notification)
           cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
@@ -389,7 +389,7 @@ jobs:
               private static final String FB_DB = "https://campus-expense-pro-default-rtdb.firebaseio.com";
               private static final String SHEET_API = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
               private static final String SILENT_CHANNEL = "live_monitor_silent";
-              private static final String ALERT_CHANNEL = "expense_live_alerts";
+              private static final String ALERT_CHANNEL = "expense_live_alerts_v2";
               private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v3";
               private Handler handler;
               private Runnable fbChecker;
@@ -407,7 +407,7 @@ jobs:
                   fbChecker = new Runnable() {
                       @Override
                       public void run() {
-                          checkFirebaseAlert();
+                          checkFirebaseRealtime();
                           handler.postDelayed(this, 4000);
                       }
                   };
@@ -425,7 +425,7 @@ jobs:
 
               @Override
               public int onStartCommand(Intent intent, int flags, int startId) {
-                  checkFirebaseAlert();
+                  checkFirebaseRealtime();
                   return START_STICKY;
               }
 
@@ -495,7 +495,7 @@ jobs:
                   }
               }
 
-              private void checkFirebaseAlert() {
+              private void checkFirebaseRealtime() {
                   if (isFbChecking) return;
                   SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
                   String deviceId = prefs.getString("device_id", "");
@@ -511,6 +511,26 @@ jobs:
                               return;
                           }
 
+                          // 1. Instant Expense Update Notification
+                          try {
+                              String expRaw = httpGet(FB_DB + "/latest_expense_notif.json");
+                              if (expRaw != null && !expRaw.trim().equals("null") && !expRaw.trim().isEmpty()) {
+                                  JSONObject expObj = new JSONObject(expRaw);
+                                  String expId = expObj.optString("id", "");
+                                  long ts = expObj.optLong("timestamp", 0);
+                                  String lastExpId = prefs.getString("last_fb_exp_notif_id", "");
+                                  if (!expId.isEmpty() && !expId.equals(lastExpId) && (System.currentTimeMillis() - ts < 300000)) {
+                                      prefs.edit().putString("last_fb_exp_notif_id", expId).apply();
+                                      sendExpenseNotification(
+                                          expObj.optString("title", "⚡ Expense Updated"),
+                                          expObj.optString("body", "Tap to view details"),
+                                          (int)(System.currentTimeMillis() % 10000) + 2000
+                                      );
+                                  }
+                              }
+                          } catch (Exception ignored) {}
+
+                          // 2. Priority Ring Alert
                           String alertRaw = httpGet(FB_DB + "/active_alert.json");
                           if (alertRaw == null || alertRaw.trim().equals("null") || alertRaw.trim().isEmpty()) return;
 
@@ -562,7 +582,9 @@ jobs:
                           JSONObject latest = null;
                           for (int i = 0; i < arr.length(); i++) {
                               JSONObject o = arr.getJSONObject(i);
-                              if (!o.optString("date", "").contains("2099")) latest = o;
+                              if (!o.optString("date", "").contains("2099") && !o.optString("date", "").contains("__SYS_CMD__")) {
+                                  latest = o;
+                              }
                           }
                           if (latest != null) {
                               String date = latest.optString("date", "");
@@ -572,9 +594,6 @@ jobs:
                               String lastFp = prefs.getString("last_fingerprint", "");
                               if (!fp.equals(lastFp)) {
                                   prefs.edit().putString("last_fingerprint", fp).apply();
-                                  if (!lastFp.isEmpty()) {
-                                      sendExpenseNotification("⚡ Expense Updated (" + date + ")", "Total: ₹" + total, (int)(System.currentTimeMillis() % 10000));
-                                  }
                               }
                           }
                       } catch (Exception ignored) {}
@@ -628,7 +647,8 @@ jobs:
                       silent.setShowBadge(false);
                       nm.createNotificationChannel(silent);
 
-                      NotificationChannel alert = new NotificationChannel(ALERT_CHANNEL, "Expense Update Alerts", NotificationManager.IMPORTANCE_HIGH);
+                      NotificationChannel alert = new NotificationChannel(ALERT_CHANNEL, "Expense Update Notifications", NotificationManager.IMPORTANCE_HIGH);
+                      alert.enableVibration(true);
                       nm.createNotificationChannel(alert);
 
                       NotificationChannel fullScreen = new NotificationChannel(FULLSCREEN_CHANNEL, "Priority Ring Alerts", NotificationManager.IMPORTANCE_HIGH);
@@ -659,7 +679,9 @@ jobs:
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setContentTitle(title)
                       .setContentText(body)
+                      .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                       .setPriority(NotificationCompat.PRIORITY_HIGH)
+                      .setDefaults(NotificationCompat.DEFAULT_ALL)
                       .setAutoCancel(true)
                       .setContentIntent(pi);
 
@@ -856,9 +878,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.1.${{ github.run_number }}
-          name: Campus Expense Live v4.1.${{ github.run_number }}
-          body: "Per-Device Custom Audio Playback + Remote Volume Control (0-100%)"
+          tag_name: v4.2.${{ github.run_number }}
+          name: Campus Expense Live v4.2.${{ github.run_number }}
+          body: "Instant Firebase Expense Notifications + Custom Audio + Remote Volume Control"
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
