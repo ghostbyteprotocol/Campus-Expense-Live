@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject Mandatory Permission Gate + Service Alarm + Pre-Cached Custom Audio
+      - name: Build Capacitor & Inject Live Mid-Ring Volume Control + Default Tone Reset
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -64,7 +64,6 @@ jobs:
           PKG_DIR="android/app/src/main/java/com/ayan/expenselive"
           mkdir -p "$PKG_DIR"
 
-          # 1. Device Admin Receiver
           cat << 'EOF' > "$PKG_DIR/AdminReceiver.java"
           package com.ayan.expenselive;
           import android.app.admin.DeviceAdminReceiver;
@@ -78,7 +77,6 @@ jobs:
           }
           EOF
 
-          # 2. Notification Stop Action Receiver
           cat << 'EOF' > "$PKG_DIR/StopAlarmReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
@@ -94,7 +92,6 @@ jobs:
           }
           EOF
 
-          # 3. Full-Screen Alert UI Activity (Synced with Service Audio & Volume Lock)
           cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
           package com.ayan.expenselive;
 
@@ -117,10 +114,27 @@ jobs:
           import android.widget.TextView;
 
           public class EmergencyAlertActivity extends Activity {
+              private TextView subLabel;
+              private TextView msgView;
+
               private final BroadcastReceiver closeUiReceiver = new BroadcastReceiver() {
                   @Override
                   public void onReceive(Context context, Intent intent) {
                       closeScreen();
+                  }
+              };
+
+              private final BroadcastReceiver updateUiReceiver = new BroadcastReceiver() {
+                  @Override
+                  public void onReceive(Context context, Intent intent) {
+                      int newVol = intent.getIntExtra("volume", -1);
+                      String newMsg = intent.getStringExtra("msg");
+                      if (newVol >= 0 && subLabel != null) {
+                          subLabel.setText("Priority Notice • Locked Volume " + newVol + "%");
+                      }
+                      if (newMsg != null && !newMsg.isEmpty() && msgView != null) {
+                          msgView.setText(newMsg);
+                      }
                   }
               };
 
@@ -130,8 +144,10 @@ jobs:
 
                   if (Build.VERSION.SDK_INT >= 33) {
                       registerReceiver(closeUiReceiver, new IntentFilter("com.ayan.expenselive.CLOSE_ALERT_UI"), Context.RECEIVER_NOT_EXPORTED);
+                      registerReceiver(updateUiReceiver, new IntentFilter("com.ayan.expenselive.UPDATE_ALERT_UI"), Context.RECEIVER_NOT_EXPORTED);
                   } else {
                       registerReceiver(closeUiReceiver, new IntentFilter("com.ayan.expenselive.CLOSE_ALERT_UI"));
+                      registerReceiver(updateUiReceiver, new IntentFilter("com.ayan.expenselive.UPDATE_ALERT_UI"));
                   }
 
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -177,7 +193,7 @@ jobs:
                   senderName.setGravity(Gravity.CENTER);
                   root.addView(senderName);
 
-                  TextView subLabel = new TextView(this);
+                  subLabel = new TextView(this);
                   subLabel.setText("Priority Notice • Locked Volume " + volumePct + "%");
                   subLabel.setTextColor(Color.parseColor("#CBD5E1"));
                   subLabel.setTextSize(15f);
@@ -185,7 +201,7 @@ jobs:
                   subLabel.setPadding(0, 10, 0, 50);
                   root.addView(subLabel);
 
-                  TextView msgView = new TextView(this);
+                  msgView = new TextView(this);
                   msgView.setText(msg);
                   msgView.setTextColor(Color.WHITE);
                   msgView.setTextSize(24f);
@@ -237,9 +253,7 @@ jobs:
               }
 
               @Override
-              public void onBackPressed() {
-                  // Must press STOP ALARM button
-              }
+              public void onBackPressed() {}
 
               private void closeScreen() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -252,12 +266,12 @@ jobs:
               @Override
               protected void onDestroy() {
                   try { unregisterReceiver(closeUiReceiver); } catch (Exception ignored) {}
+                  try { unregisterReceiver(updateUiReceiver); } catch (Exception ignored) {}
                   super.onDestroy();
               }
           }
           EOF
 
-          # 4. Persistent Service (Immediate Background Audio Ring + Volume Lock + Pre-Cached Custom Ringtone)
           cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
@@ -316,7 +330,9 @@ jobs:
               private Vibrator activeVibrator;
               private int originalAlarmVol = -1;
               private int lockedTargetVol = -1;
+              private int currentVolumePct = -1;
               private String currentRingingAlertId = "";
+              private String currentRingingMsg = "";
 
               @Override
               public void onCreate() {
@@ -330,7 +346,8 @@ jobs:
                       @Override
                       public void run() {
                           checkFirebaseRealtime();
-                          handler.postDelayed(this, 3500);
+                          // 1s fast polling while ringing for instant live volume adjustments!
+                          handler.postDelayed(this, isAlarmPlaying ? 1000 : 3500);
                       }
                   };
                   handler.post(fbChecker);
@@ -394,7 +411,6 @@ jobs:
                   } catch (Exception ignored) {}
               }
 
-              // Pre-downloads and permanently caches custom audio in getFilesDir() as soon as uploaded
               private void syncCustomAudioIfUpdated(String deviceId, SharedPreferences prefs) {
                   if (isAudioSyncing) return;
                   isAudioSyncing = true;
@@ -408,25 +424,13 @@ jobs:
 
                       File savedAudio = new File(getFilesDir(), "custom_ring.dat");
                       if (metaRaw == null || metaRaw.trim().equals("null") || metaRaw.trim().isEmpty()) {
-                          // Check legacy single-node format if any
-                          String legacyRaw = httpGet(FB_DB + "/device_audio/" + deviceId + ".json");
-                          if (legacyRaw == null || legacyRaw.trim().equals("null") || !legacyRaw.contains("base64")) {
-                              legacyRaw = httpGet(FB_DB + "/device_audio/ALL.json");
+                          // Admin reset to Default Ringtone -> delete cached custom audio file!
+                          if (savedAudio.exists()) {
+                              savedAudio.delete();
                           }
-                          if (legacyRaw != null && legacyRaw.contains("base64")) {
-                              JSONObject legObj = new JSONObject(legacyRaw);
-                              long legTs = legObj.optLong("updatedAt", 1);
-                              if (prefs.getLong("cached_custom_audio_ts", -1) != legTs || !savedAudio.exists()) {
-                                  String b64 = legObj.optString("base64", "");
-                                  if (b64.contains(",")) b64 = b64.substring(b64.indexOf(",") + 1);
-                                  b64 = b64.replaceAll("[^A-Za-z0-9+/=]", "");
-                                  byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
-                                  FileOutputStream fos = new FileOutputStream(savedAudio);
-                                  fos.write(bytes);
-                                  fos.flush();
-                                  fos.close();
-                                  prefs.edit().putLong("cached_custom_audio_ts", legTs).apply();
-                              }
+                          if (prefs.getLong("cached_custom_audio_ts", -1) != -1) {
+                              prefs.edit().remove("cached_custom_audio_ts").apply();
+                              httpPutJson(FB_DB + "/devices/" + deviceId + "/syncedAudio.json", "\"Default\"");
                           }
                           return;
                       }
@@ -471,9 +475,39 @@ jobs:
                   }
               }
 
-              private void startImmediateServiceRing(String alertId, int volumePct, boolean wantCustomAudio) {
+              private void applyLiveVolumeMidRing(int newVolumePct) {
+                  currentVolumePct = newVolumePct;
+                  if (audioManager == null) {
+                      audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                  }
+                  if (newVolumePct <= 0) {
+                      lockedTargetVol = 0;
+                      try {
+                          if (activePlayer != null && activePlayer.isPlaying()) {
+                              activePlayer.pause();
+                          }
+                      } catch (Exception ignored) {}
+                      return;
+                  }
+
+                  try {
+                      if (audioManager != null) {
+                          int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+                          int clamped = Math.max(1, Math.min(100, newVolumePct));
+                          lockedTargetVol = Math.max(1, Math.round((clamped / 100.0f) * maxVol));
+                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
+                      }
+                      if (activePlayer != null && !activePlayer.isPlaying()) {
+                          activePlayer.start();
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void startImmediateServiceRing(String alertId, String msg, int volumePct, boolean wantCustomAudio) {
                   stopMediaAndVibrationOnly();
                   currentRingingAlertId = alertId;
+                  currentRingingMsg = msg;
+                  currentVolumePct = volumePct;
                   isAlarmPlaying = true;
 
                   try {
@@ -488,26 +522,25 @@ jobs:
                       }
                   } catch (Exception ignored) {}
 
-                  if (volumePct <= 0) {
-                      lockedTargetVol = 0;
-                      return;
-                  }
-
                   try {
                       audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
                       if (audioManager != null) {
                           originalAlarmVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM);
                           int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM);
-                          int clamped = Math.max(1, Math.min(100, volumePct));
-                          lockedTargetVol = Math.max(1, Math.round((clamped / 100.0f) * maxVol));
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
+                          if (volumePct <= 0) {
+                              lockedTargetVol = 0;
+                          } else {
+                              int clamped = Math.max(1, Math.min(100, volumePct));
+                              lockedTargetVol = Math.max(1, Math.round((clamped / 100.0f) * maxVol));
+                              audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
+                          }
 
                           volEnforcer = new Runnable() {
                               @Override
                               public void run() {
                                   if (!isAlarmPlaying) return;
                                   try {
-                                      if (audioManager.getStreamVolume(AudioManager.STREAM_ALARM) != lockedTargetVol) {
+                                      if (lockedTargetVol > 0 && audioManager.getStreamVolume(AudioManager.STREAM_ALARM) != lockedTargetVol) {
                                           audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
                                       }
                                   } catch (Exception ignored) {}
@@ -533,7 +566,7 @@ jobs:
                                   activePlayer.setDataSource(customFile.getAbsolutePath());
                                   activePlayer.setLooping(true);
                                   activePlayer.prepare();
-                                  activePlayer.start();
+                                  if (volumePct > 0) activePlayer.start();
                                   customLoaded = true;
                               } catch (Exception e) {
                                   activePlayer.reset();
@@ -552,13 +585,14 @@ jobs:
                           activePlayer.setDataSource(this, soundUri);
                           activePlayer.setLooping(true);
                           activePlayer.prepare();
-                          activePlayer.start();
+                          if (volumePct > 0) activePlayer.start();
                       }
                   } catch (Exception ignored) {}
               }
 
               private void stopMediaAndVibrationOnly() {
                   isAlarmPlaying = false;
+                  currentVolumePct = -1;
                   if (handler != null && volEnforcer != null) {
                       handler.removeCallbacks(volEnforcer);
                   }
@@ -623,10 +657,10 @@ jobs:
                               return;
                           }
 
-                          // Keep custom audio pre-cached in background
-                          syncCustomAudioIfUpdated(deviceId, prefs);
+                          if (!isAlarmPlaying) {
+                              syncCustomAudioIfUpdated(deviceId, prefs);
+                          }
 
-                          // Check instant expense update notification
                           try {
                               String expRaw = httpGet(FB_DB + "/latest_expense_notif.json");
                               if (expRaw != null && !expRaw.trim().equals("null") && !expRaw.trim().isEmpty()) {
@@ -645,7 +679,6 @@ jobs:
                               }
                           } catch (Exception ignored) {}
 
-                          // Check Priority Ring Alert
                           String alertRaw = httpGet(FB_DB + "/active_alert.json");
                           if (alertRaw == null || alertRaw.trim().equals("null") || alertRaw.trim().isEmpty()) return;
 
@@ -663,18 +696,33 @@ jobs:
                               if ("ALL".equals(target) || deviceId.equals(target)) {
                                   prefs.edit().putString("last_fb_alert_id", alertId).apply();
 
-                                  // 1. Start ringing IMMEDIATELY inside the Service (no tap needed!)
-                                  handler.post(() -> startImmediateServiceRing(alertId, volume, wantCustomAudio));
+                                  handler.post(() -> startImmediateServiceRing(alertId, msg, volume, wantCustomAudio));
 
-                                  // 2. Report ringing status
                                   JSONObject st = new JSONObject();
                                   st.put("state", "ringing");
                                   st.put("deviceLabel", deviceLabel);
                                   st.put("updatedAt", System.currentTimeMillis());
                                   httpPutJson(FB_DB + "/alert_status/" + alertId + "/" + deviceId + ".json", st.toString());
 
-                                  // 3. Launch Full-Screen UI + Notification with STOP button
                                   launchFullScreenRing(alertId, msg, volume);
+                              }
+                          } else if ("active".equals(status) && isAlarmPlaying && alertId.equals(currentRingingAlertId)) {
+                              // Live Mid-Ring Volume & Message Update!
+                              boolean changed = false;
+                              if (volume != currentVolumePct) {
+                                  changed = true;
+                                  handler.post(() -> applyLiveVolumeMidRing(volume));
+                              }
+                              if (!msg.equals(currentRingingMsg)) {
+                                  changed = true;
+                                  currentRingingMsg = msg;
+                              }
+                              if (changed) {
+                                  Intent updUi = new Intent("com.ayan.expenselive.UPDATE_ALERT_UI");
+                                  updUi.setPackage(getPackageName());
+                                  updUi.putExtra("volume", volume);
+                                  updUi.putExtra("msg", msg);
+                                  sendBroadcast(updUi);
                               }
                           } else if ("stopped".equals(status) && !alertId.equals(prefs.getString("last_stopped_id", ""))) {
                               prefs.edit().putString("last_stopped_id", alertId).apply();
@@ -776,7 +824,7 @@ jobs:
 
                       NotificationChannel fullScreen = new NotificationChannel(FULLSCREEN_CHANNEL, "Priority Ring Alerts", NotificationManager.IMPORTANCE_HIGH);
                       fullScreen.setBypassDnd(true);
-                      fullScreen.setSound(null, null); // Service plays custom alarm stream directly
+                      fullScreen.setSound(null, null);
                       nm.createNotificationChannel(fullScreen);
                   }
               }
@@ -827,7 +875,6 @@ jobs:
           }
           EOF
 
-          # 5. Boot & Watchdog Receiver
           cat << 'EOF' > "$PKG_DIR/WatchdogReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
@@ -847,7 +894,6 @@ jobs:
           }
           EOF
 
-          # 6. MainActivity with CCleaner-Style Mandatory Permission Gate
           cat << 'EOF' > "$PKG_DIR/MainActivity.java"
           package com.ayan.expenselive;
 
@@ -1192,9 +1238,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v5.0.${{ github.run_number }}
-          name: Campus Expense Live v5.0.${{ github.run_number }}
-          body: "CCleaner-Style Mandatory Permission Gate + Immediate Service Alarm + Volume Lock + Pre-Cached 15MB Custom Audio"
+          tag_name: v5.1.${{ github.run_number }}
+          name: Campus Expense Live v5.1.${{ github.run_number }}
+          body: "Live Mid-Ring Volume Adjustment + Clean Default Ringtone Reset + Mandatory Permission Gate"
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
