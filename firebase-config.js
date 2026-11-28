@@ -27,6 +27,7 @@
       appId: "1:1044806088917:web:647b0539dd5afe36beca5c"
     },
     geminiApiKey: _aiKey,
-    sheetApiUrl: "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec"
+    sheetApiUrl: "  sheetApiUrl: "https://script.google.com/macros/s/AKfycbyhJp6EQwI2T8uK_eHDcMRVKd2suSkMckeWK20Je3AiTvy13UuWAKt-l4czWYmXPLVG/exec"
+"
   };
 })();
