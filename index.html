@@ -27,7 +27,6 @@
     }
     .container { max-width: 480px; margin: 0 auto; }
 
-    /* Login Screen */
     #loginScreen {
       display: none;
       min-height: 88vh;
@@ -80,7 +79,6 @@
     }
     .login-err { color: #f87171; font-size: 13px; margin-top: 12px; min-height: 18px; }
 
-    /* Header */
     .header {
       display: flex;
       justify-content: space-between;
@@ -108,9 +106,9 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      cursor: pointer;
     }
 
-    /* Alert Banner */
     #alertBanner {
       display: none;
       background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.18));
@@ -122,7 +120,6 @@
     .alert-top { display: flex; justify-content: space-between; font-size: 11px; color: #fbbf24; font-weight: 700; margin-bottom: 4px; }
     .alert-msg { font-size: 16px; font-weight: 700; color: #fff; }
 
-    /* Car Fuel Gauge Budget Card */
     .fuel-card {
       background: var(--card);
       border: 1.5px solid var(--card-border);
@@ -209,7 +206,6 @@
     .f-stat-val { font-size: 15px; font-weight: 800; color: #fff; }
     .fuel-meta { font-size: 11px; color: var(--muted); text-align: center; margin-top: 10px; }
 
-    /* Summary Grid */
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -226,7 +222,6 @@
     .sum-lbl { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
     .sum-val { font-size: 17px; font-weight: 800; color: #fff; }
 
-    /* Expense History List */
     .sec-title {
       font-size: 15px;
       font-weight: 700;
@@ -279,7 +274,6 @@
 </head>
 <body>
   <div class="container">
-    <!-- 4-Digit Login Gate -->
     <div id="loginScreen">
       <div class="login-box">
         <div class="login-icon">🔐</div>
@@ -298,7 +292,6 @@
       </div>
     </div>
 
-    <!-- Main Dashboard -->
     <div id="mainApp" style="display:none;">
       <div class="header">
         <div class="brand" onclick="handleSecretTap()">
@@ -308,10 +301,9 @@
             <p id="t_liveStatus">● Live Cloud Sync</p>
           </div>
         </div>
-        <div class="device-pill" id="deviceBadge">📱 Connected</div>
+        <div class="device-pill" id="deviceBadge" onclick="openBgPermissions()" title="Tap to verify background permissions">📱 Connected</div>
       </div>
 
-      <!-- Active Alert Banner -->
       <div id="alertBanner">
         <div class="alert-top">
           <span id="t_alertHeader">🔔 PRIORITY NOTICE</span>
@@ -320,7 +312,6 @@
         <div class="alert-msg" id="alertText"></div>
       </div>
 
-      <!-- Car Fuel Gauge Budget Meter -->
       <div class="fuel-card" id="fuelCard">
         <div class="fuel-header">
           <div class="fuel-title" id="t_fuelTitle">⛽ Budget Fuel Meter</div>
@@ -356,7 +347,6 @@
         <div class="fuel-meta" id="budgetMeta">No active budget cycle set</div>
       </div>
 
-      <!-- Quick Summaries -->
       <div class="summary-grid">
         <div class="sum-card">
           <div class="sum-lbl" id="t_sumToday">Today</div>
@@ -488,6 +478,7 @@
     let liveFirebaseExpenses = {};
     let allExpenses = [];
     let currentBudget = null;
+    let adminUninstallPin = localStorage.getItem("cel_uninstall_pin") || "";
     let tapCount = 0;
     let tapTimer = null;
 
@@ -532,6 +523,13 @@
       if (cfg.clientLang && (cfg.clientLang === "en" || cfg.clientLang === "bn")) {
         currentLang = cfg.clientLang;
       }
+      if (cfg.uninstallPin) {
+        adminUninstallPin = String(cfg.uninstallPin);
+        localStorage.setItem("cel_uninstall_pin", adminUninstallPin);
+      } else {
+        adminUninstallPin = "";
+        localStorage.removeItem("cel_uninstall_pin");
+      }
       customOverrides = cfg.customTexts || {};
       applyTranslations();
     });
@@ -543,6 +541,14 @@
         }
       } catch (e) {}
       return "Android Device";
+    }
+
+    function openBgPermissions() {
+      try {
+        if (window.AndroidBridge && window.AndroidBridge.openSpecialPermissions) {
+          window.AndroidBridge.openSpecialPermissions();
+        }
+      } catch (e) {}
     }
 
     function initApp() {
@@ -579,13 +585,8 @@
 
       try {
         const snap = await db.ref("config/accessCode").once("value");
-        let validCode = snap.val();
-        if (!validCode) {
-          validCode = "2007";
-          await db.ref("config/accessCode").set("2007");
-        }
-
-        if (String(code) !== String(validCode)) {
+        const validCode = snap.val();
+        if (!validCode || String(code) !== String(validCode)) {
           errEl.textContent = t("errWrongPin");
           return;
         }
@@ -639,19 +640,16 @@
       updateHeartbeat();
       setInterval(updateHeartbeat, 30000);
 
-      // Live Budget Fuel Gauge Listener (Supports Reset / No Budget)
       db.ref("budget").on("value", (snap) => {
         currentBudget = snap.val();
         renderFuelGauge();
       });
 
-      // Live Expense Mirror Listener (Instant updates as soon as Admin saves!)
       db.ref("expenses_backup").on("value", (snap) => {
         liveFirebaseExpenses = snap.val() || {};
         mergeAndRenderExpenses();
       });
 
-      // Active Alert Banner Listener
       db.ref("active_alert").on("value", (snap) => {
         const alertData = snap.val();
         const banner = document.getElementById("alertBanner");
@@ -668,7 +666,6 @@
       });
     }
 
-    // Handles "27/11/2026 (Friday)", "27/11/2026", "2026-11-27", and ISO strings
     function parseSheetDate(dateStr) {
       if (!dateStr) return null;
       const clean = String(dateStr).trim();
@@ -729,7 +726,6 @@
         });
       });
 
-      // Overlay live Firebase entries so new/edited entries show instantly
       Object.values(liveFirebaseExpenses || {}).forEach(r => {
         if (!r || !r.date) return;
         const dKey = normalizeDateKey(r.date);
@@ -784,7 +780,6 @@
 
       card.classList.remove("fuel-critical");
 
-      // Handle Reset / No Budget Set state cleanly
       if (!currentBudget || !currentBudget.total || Number(currentBudget.total) <= 0) {
         badge.style.background = "rgba(148, 163, 184, 0.16)";
         badge.style.color = "#cbd5e1";
@@ -895,19 +890,26 @@
       }
     }
 
+    // No default PIN! Strictly checks Admin-configured PIN from Firebase
     function handleSecretTap() {
       tapCount++;
       clearTimeout(tapTimer);
       tapTimer = setTimeout(() => { tapCount = 0; }, 2000);
       if (tapCount >= 5) {
         tapCount = 0;
-        const pin = prompt("Admin Unlock PIN:");
-        if (pin === "2007") {
+        if (!adminUninstallPin) {
+          alert("Uninstall Unlock PIN is not set yet. Set it from your Admin App Control panel.");
+          return;
+        }
+        const pin = prompt("Enter Admin Uninstall Unlock PIN:");
+        if (pin !== null && String(pin).trim() === adminUninstallPin) {
           try {
             if (window.AndroidBridge && window.AndroidBridge.disableDeviceAdmin) {
               window.AndroidBridge.disableDeviceAdmin();
             }
           } catch (e) {}
+        } else if (pin !== null) {
+          alert("❌ Incorrect PIN!");
         }
       }
     }
