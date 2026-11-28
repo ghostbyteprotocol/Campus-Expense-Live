@@ -26,7 +26,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Capacitor & Inject MIUI Popup Fix + Volume Lock + 15MB Chunked Audio
+      - name: Build Capacitor & Inject Mandatory Permission Gate + Service Alarm + Pre-Cached Custom Audio
         run: |
           npm install --no-audit --no-fund
           npm run build
@@ -78,7 +78,23 @@ jobs:
           }
           EOF
 
-          # 2. Full-Screen Alert Activity with Strict Hardware & Software Volume Lock
+          # 2. Notification Stop Action Receiver
+          cat << 'EOF' > "$PKG_DIR/StopAlarmReceiver.java"
+          package com.ayan.expenselive;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          public class StopAlarmReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  Intent stopSvc = new Intent(context, LiveMonitorService.class);
+                  stopSvc.setAction("ACTION_STOP_ALARM");
+                  context.startService(stopSvc);
+              }
+          }
+          EOF
+
+          # 3. Full-Screen Alert UI Activity (Synced with Service Audio & Volume Lock)
           cat << 'EOF' > "$PKG_DIR/EmergencyAlertActivity.java"
           package com.ayan.expenselive;
 
@@ -88,51 +104,23 @@ jobs:
           import android.content.Context;
           import android.content.Intent;
           import android.content.IntentFilter;
-          import android.content.SharedPreferences;
           import android.graphics.Color;
           import android.graphics.Typeface;
           import android.graphics.drawable.GradientDrawable;
-          import android.media.AudioAttributes;
-          import android.media.AudioManager;
-          import android.media.MediaPlayer;
-          import android.media.RingtoneManager;
-          import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
-          import android.os.Handler;
-          import android.os.Looper;
-          import android.os.VibrationEffect;
-          import android.os.Vibrator;
           import android.view.Gravity;
           import android.view.KeyEvent;
           import android.view.WindowManager;
           import android.widget.Button;
           import android.widget.LinearLayout;
           import android.widget.TextView;
-          import org.json.JSONObject;
-          import java.io.File;
-          import java.io.OutputStream;
-          import java.net.HttpURLConnection;
-          import java.net.URL;
-          import java.nio.charset.StandardCharsets;
 
           public class EmergencyAlertActivity extends Activity {
-              private static final String FB_DB = "https://campus-expense-pro-default-rtdb.firebaseio.com";
-              private MediaPlayer mediaPlayer;
-              private AudioManager audioManager;
-              private Vibrator vibrator;
-              private int originalAlarmVol = -1;
-              private int lockedTargetVol = -1;
-              private boolean isRinging = false;
-              private Handler volHandler;
-              private Runnable volEnforcer;
-              private String alertId = "";
-              private boolean reportedSeen = false;
-
-              private final BroadcastReceiver remoteStopReceiver = new BroadcastReceiver() {
+              private final BroadcastReceiver closeUiReceiver = new BroadcastReceiver() {
                   @Override
                   public void onReceive(Context context, Intent intent) {
-                      stopAndExit();
+                      closeScreen();
                   }
               };
 
@@ -141,9 +129,9 @@ jobs:
                   super.onCreate(savedInstanceState);
 
                   if (Build.VERSION.SDK_INT >= 33) {
-                      registerReceiver(remoteStopReceiver, new IntentFilter("com.ayan.expenselive.STOP_ALARM"), Context.RECEIVER_NOT_EXPORTED);
+                      registerReceiver(closeUiReceiver, new IntentFilter("com.ayan.expenselive.CLOSE_ALERT_UI"), Context.RECEIVER_NOT_EXPORTED);
                   } else {
-                      registerReceiver(remoteStopReceiver, new IntentFilter("com.ayan.expenselive.STOP_ALARM"));
+                      registerReceiver(closeUiReceiver, new IntentFilter("com.ayan.expenselive.CLOSE_ALERT_UI"));
                   }
 
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -160,14 +148,11 @@ jobs:
                       );
                   }
 
-                  alertId = getIntent().getStringExtra("alertId");
-                  if (alertId == null) alertId = "";
                   String msg = getIntent().getStringExtra("msg");
                   if (msg == null || msg.trim().isEmpty()) {
                       msg = "Priority Alert! Please check.";
                   }
                   int volumePct = getIntent().getIntExtra("volume", 100);
-                  boolean useCustomAudio = getIntent().getBooleanExtra("useCustomAudio", false);
 
                   LinearLayout root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
@@ -193,7 +178,7 @@ jobs:
                   root.addView(senderName);
 
                   TextView subLabel = new TextView(this);
-                  subLabel.setText("Priority Notice • Locked Sound " + volumePct + "%");
+                  subLabel.setText("Priority Notice • Locked Volume " + volumePct + "%");
                   subLabel.setTextColor(Color.parseColor("#CBD5E1"));
                   subLabel.setTextSize(15f);
                   subLabel.setGravity(Gravity.CENTER);
@@ -231,21 +216,21 @@ jobs:
                   btnBg.setCornerRadius(40f);
                   stopBtn.setBackground(btnBg);
                   stopBtn.setPadding(90, 48, 90, 48);
-                  stopBtn.setOnClickListener(v -> stopAndExit());
+                  stopBtn.setOnClickListener(v -> {
+                      Intent stopSvc = new Intent(this, LiveMonitorService.class);
+                      stopSvc.setAction("ACTION_STOP_ALARM");
+                      startService(stopSvc);
+                      closeScreen();
+                  });
                   root.addView(stopBtn);
 
                   setContentView(root);
-                  startRingWithVolume(volumePct, useCustomAudio);
               }
 
-              // Block Volume Down / Up / Mute hardware buttons so recipient cannot lower sound
               @Override
               public boolean dispatchKeyEvent(KeyEvent event) {
                   int code = event.getKeyCode();
                   if (code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_MUTE) {
-                      if (audioManager != null && lockedTargetVol > 0) {
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
-                      }
                       return true;
                   }
                   return super.dispatchKeyEvent(event);
@@ -253,141 +238,10 @@ jobs:
 
               @Override
               public void onBackPressed() {
-                  // Prevent dismissing with Back button; must press STOP ALARM
+                  // Must press STOP ALARM button
               }
 
-              private void startRingWithVolume(int volumePct, boolean useCustomAudio) {
-                  isRinging = true;
-                  try {
-                      vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                      if (vibrator != null && vibrator.hasVibrator()) {
-                          long[] pattern = {0, 700, 350, 700};
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                              vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0));
-                          } else {
-                              vibrator.vibrate(pattern, 0);
-                          }
-                      }
-                  } catch (Exception ignored) {}
-
-                  if (volumePct <= 0) {
-                      lockedTargetVol = 0;
-                      return;
-                  }
-
-                  try {
-                      audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                      if (audioManager != null) {
-                          originalAlarmVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM);
-                          int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM);
-                          int clamped = Math.max(1, Math.min(100, volumePct));
-                          lockedTargetVol = Math.max(1, Math.round((clamped / 100.0f) * maxVol));
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
-
-                          // Continuous 250ms volume lock loop (counters on-screen volume slider drags too)
-                          volHandler = new Handler(Looper.getMainLooper());
-                          volEnforcer = new Runnable() {
-                              @Override
-                              public void run() {
-                                  if (!isRinging) return;
-                                  try {
-                                      if (audioManager.getStreamVolume(AudioManager.STREAM_ALARM) != lockedTargetVol) {
-                                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
-                                      }
-                                  } catch (Exception ignored) {}
-                                  volHandler.postDelayed(this, 250);
-                              }
-                          };
-                          volHandler.postDelayed(volEnforcer, 250);
-                      }
-
-                      mediaPlayer = new MediaPlayer();
-                      mediaPlayer.setAudioAttributes(
-                          new AudioAttributes.Builder()
-                              .setUsage(AudioAttributes.USAGE_ALARM)
-                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                              .build()
-                      );
-
-                      boolean customLoaded = false;
-                      if (useCustomAudio) {
-                          File customFile = new File(getCacheDir(), "custom_ring.mp3");
-                          if (customFile.exists() && customFile.length() > 100) {
-                              try {
-                                  mediaPlayer.setDataSource(customFile.getAbsolutePath());
-                                  mediaPlayer.setLooping(true);
-                                  mediaPlayer.prepare();
-                                  mediaPlayer.start();
-                                  customLoaded = true;
-                              } catch (Exception e) {
-                                  mediaPlayer.reset();
-                              }
-                          }
-                      }
-
-                      if (!customLoaded) {
-                          int resId = getResources().getIdentifier("alert", "raw", getPackageName());
-                          Uri soundUri = (resId != 0)
-                              ? Uri.parse("android.resource://" + getPackageName() + "/" + resId)
-                              : RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-
-                          if (soundUri == null) {
-                              soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
-                          }
-                          mediaPlayer.setDataSource(this, soundUri);
-                          mediaPlayer.setLooping(true);
-                          mediaPlayer.prepare();
-                          mediaPlayer.start();
-                      }
-                  } catch (Exception ignored) {}
-              }
-
-              private void reportSeenToFirebase() {
-                  if (reportedSeen || alertId.isEmpty()) return;
-                  reportedSeen = true;
-                  SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
-                  String deviceId = prefs.getString("device_id", "");
-                  String deviceLabel = prefs.getString("device_label", Build.MODEL);
-                  if (deviceId.isEmpty()) return;
-
-                  new Thread(() -> {
-                      try {
-                          URL url = new URL(FB_DB + "/alert_status/" + alertId + "/" + deviceId + ".json");
-                          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                          conn.setRequestMethod("PUT");
-                          conn.setRequestProperty("Content-Type", "application/json");
-                          conn.setDoOutput(true);
-                          JSONObject body = new JSONObject();
-                          body.put("state", "seen");
-                          body.put("deviceLabel", deviceLabel);
-                          body.put("updatedAt", System.currentTimeMillis());
-                          OutputStream os = conn.getOutputStream();
-                          os.write(body.toString().getBytes(StandardCharsets.UTF_8));
-                          os.close();
-                          conn.getResponseCode();
-                          conn.disconnect();
-                      } catch (Exception ignored) {}
-                  }).start();
-              }
-
-              private void stopAndExit() {
-                  isRinging = false;
-                  if (volHandler != null && volEnforcer != null) {
-                      volHandler.removeCallbacks(volEnforcer);
-                  }
-                  reportSeenToFirebase();
-                  try {
-                      if (vibrator != null) vibrator.cancel();
-                      if (mediaPlayer != null) {
-                          if (mediaPlayer.isPlaying()) mediaPlayer.stop();
-                          mediaPlayer.release();
-                          mediaPlayer = null;
-                      }
-                      if (audioManager != null && originalAlarmVol >= 0) {
-                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalAlarmVol, 0);
-                      }
-                  } catch (Exception ignored) {}
-
+              private void closeScreen() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                       finishAndRemoveTask();
                   } else {
@@ -397,14 +251,13 @@ jobs:
 
               @Override
               protected void onDestroy() {
-                  try { unregisterReceiver(remoteStopReceiver); } catch (Exception ignored) {}
-                  stopAndExit();
+                  try { unregisterReceiver(closeUiReceiver); } catch (Exception ignored) {}
                   super.onDestroy();
               }
           }
           EOF
 
-          # 3. Persistent Firebase Realtime Monitor Service (Supports 15MB Chunked Audio + Caching)
+          # 4. Persistent Service (Immediate Background Audio Ring + Volume Lock + Pre-Cached Custom Ringtone)
           cat << 'EOF' > "$PKG_DIR/LiveMonitorService.java"
           package com.ayan.expenselive;
 
@@ -416,11 +269,18 @@ jobs:
           import android.content.Context;
           import android.content.Intent;
           import android.content.SharedPreferences;
+          import android.media.AudioAttributes;
+          import android.media.AudioManager;
+          import android.media.MediaPlayer;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
           import android.os.Build;
           import android.os.Handler;
           import android.os.IBinder;
           import android.os.Looper;
           import android.os.PowerManager;
+          import android.os.VibrationEffect;
+          import android.os.Vibrator;
           import android.util.Base64;
           import androidx.core.app.NotificationCompat;
           import org.json.JSONArray;
@@ -440,11 +300,23 @@ jobs:
               private static final String SHEET_API = "https://script.google.com/macros/s/AKfycbxY-HmehplAlhgq4RUmolx2HxsnuSJ1isHi3UTTuO_8FvsAdGgc8qEc-doefN6cTXNZ/exec";
               private static final String SILENT_CHANNEL = "live_monitor_silent";
               private static final String ALERT_CHANNEL = "expense_live_alerts_v2";
-              private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v4";
+              private static final String FULLSCREEN_CHANNEL = "ayan_fullscreen_ring_v5";
+
               private Handler handler;
               private Runnable fbChecker;
               private Runnable sheetChecker;
+              private Runnable volEnforcer;
+
               private volatile boolean isFbChecking = false;
+              private volatile boolean isAudioSyncing = false;
+              private volatile boolean isAlarmPlaying = false;
+
+              private MediaPlayer activePlayer;
+              private AudioManager audioManager;
+              private Vibrator activeVibrator;
+              private int originalAlarmVol = -1;
+              private int lockedTargetVol = -1;
+              private String currentRingingAlertId = "";
 
               @Override
               public void onCreate() {
@@ -458,7 +330,7 @@ jobs:
                       @Override
                       public void run() {
                           checkFirebaseRealtime();
-                          handler.postDelayed(this, 4000);
+                          handler.postDelayed(this, 3500);
                       }
                   };
                   handler.post(fbChecker);
@@ -475,6 +347,10 @@ jobs:
 
               @Override
               public int onStartCommand(Intent intent, int flags, int startId) {
+                  if (intent != null && "ACTION_STOP_ALARM".equals(intent.getAction())) {
+                      stopAlarmAndReportSeen();
+                      return START_STICKY;
+                  }
                   checkFirebaseRealtime();
                   return START_STICKY;
               }
@@ -484,8 +360,8 @@ jobs:
                   for (int i = 0; i < 4; i++) {
                       HttpURLConnection conn = (HttpURLConnection) new URL(current).openConnection();
                       conn.setInstanceFollowRedirects(true);
-                      conn.setConnectTimeout(12000);
-                      conn.setReadTimeout(20000);
+                      conn.setConnectTimeout(15000);
+                      conn.setReadTimeout(25000);
                       int code = conn.getResponseCode();
                       if (code == 301 || code == 302 || code == 307 || code == 308) {
                           current = conn.getHeaderField("Location");
@@ -518,8 +394,10 @@ jobs:
                   } catch (Exception ignored) {}
               }
 
-              // Downloads & caches up to 15MB chunked custom audio
-              private boolean prepareCustomAudio(String deviceId, SharedPreferences prefs) {
+              // Pre-downloads and permanently caches custom audio in getFilesDir() as soon as uploaded
+              private void syncCustomAudioIfUpdated(String deviceId, SharedPreferences prefs) {
+                  if (isAudioSyncing) return;
+                  isAudioSyncing = true;
                   try {
                       String scope = deviceId;
                       String metaRaw = httpGet(FB_DB + "/device_audio/" + scope + "/meta.json");
@@ -527,35 +405,54 @@ jobs:
                           scope = "ALL";
                           metaRaw = httpGet(FB_DB + "/device_audio/ALL/meta.json");
                       }
+
+                      File savedAudio = new File(getFilesDir(), "custom_ring.dat");
                       if (metaRaw == null || metaRaw.trim().equals("null") || metaRaw.trim().isEmpty()) {
-                          return false;
+                          // Check legacy single-node format if any
+                          String legacyRaw = httpGet(FB_DB + "/device_audio/" + deviceId + ".json");
+                          if (legacyRaw == null || legacyRaw.trim().equals("null") || !legacyRaw.contains("base64")) {
+                              legacyRaw = httpGet(FB_DB + "/device_audio/ALL.json");
+                          }
+                          if (legacyRaw != null && legacyRaw.contains("base64")) {
+                              JSONObject legObj = new JSONObject(legacyRaw);
+                              long legTs = legObj.optLong("updatedAt", 1);
+                              if (prefs.getLong("cached_custom_audio_ts", -1) != legTs || !savedAudio.exists()) {
+                                  String b64 = legObj.optString("base64", "");
+                                  if (b64.contains(",")) b64 = b64.substring(b64.indexOf(",") + 1);
+                                  b64 = b64.replaceAll("[^A-Za-z0-9+/=]", "");
+                                  byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
+                                  FileOutputStream fos = new FileOutputStream(savedAudio);
+                                  fos.write(bytes);
+                                  fos.flush();
+                                  fos.close();
+                                  prefs.edit().putLong("cached_custom_audio_ts", legTs).apply();
+                              }
+                          }
+                          return;
                       }
 
                       JSONObject meta = new JSONObject(metaRaw);
                       long updatedAt = meta.optLong("updatedAt", 0);
                       int totalChunks = meta.optInt("totalChunks", 0);
-                      if (totalChunks <= 0) return false;
+                      String fileName = meta.optString("name", "custom.mp3");
+                      if (totalChunks <= 0) return;
 
-                      File finalFile = new File(getCacheDir(), "custom_ring.mp3");
-                      String cacheKey = "cached_audio_sig_" + scope;
-                      long cachedTs = prefs.getLong(cacheKey, -1);
-                      if (cachedTs == updatedAt && finalFile.exists() && finalFile.length() > 100) {
-                          return true;
+                      if (prefs.getLong("cached_custom_audio_ts", -1) == updatedAt && savedAudio.exists() && savedAudio.length() > 100) {
+                          return;
                       }
 
-                      File tmpFile = new File(getCacheDir(), "custom_ring_tmp.mp3");
+                      File tmpFile = new File(getFilesDir(), "custom_ring_tmp.dat");
                       FileOutputStream fos = new FileOutputStream(tmpFile);
                       for (int i = 0; i < totalChunks; i++) {
                           String chunkRaw = httpGet(FB_DB + "/device_audio/" + scope + "/chunks/" + i + ".json");
                           if (chunkRaw == null || chunkRaw.trim().equals("null") || chunkRaw.trim().isEmpty()) {
                               fos.close();
-                              return false;
+                              return;
                           }
-                          Object parsedVal = new JSONTokener(chunkRaw).nextValue();
-                          String b64 = String.valueOf(parsedVal);
-                          if (b64.contains(",")) {
-                              b64 = b64.substring(b64.indexOf(",") + 1);
-                          }
+                          Object val = new JSONTokener(chunkRaw).nextValue();
+                          String b64 = String.valueOf(val);
+                          if (b64.contains(",")) b64 = b64.substring(b64.indexOf(",") + 1);
+                          b64 = b64.replaceAll("[^A-Za-z0-9+/=]", "");
                           byte[] decoded = Base64.decode(b64, Base64.DEFAULT);
                           fos.write(decoded);
                       }
@@ -563,14 +460,150 @@ jobs:
                       fos.close();
 
                       if (tmpFile.exists() && tmpFile.length() > 100) {
-                          if (finalFile.exists()) finalFile.delete();
-                          tmpFile.renameTo(finalFile);
-                          prefs.edit().putLong(cacheKey, updatedAt).apply();
-                          return true;
+                          if (savedAudio.exists()) savedAudio.delete();
+                          tmpFile.renameTo(savedAudio);
+                          prefs.edit().putLong("cached_custom_audio_ts", updatedAt).apply();
+                          httpPutJson(FB_DB + "/devices/" + deviceId + "/syncedAudio.json", "\"" + fileName.replace("\"", "") + "\"");
                       }
-                      return false;
-                  } catch (Exception e) {
-                      return false;
+                  } catch (Exception ignored) {
+                  } finally {
+                      isAudioSyncing = false;
+                  }
+              }
+
+              private void startImmediateServiceRing(String alertId, int volumePct, boolean wantCustomAudio) {
+                  stopMediaAndVibrationOnly();
+                  currentRingingAlertId = alertId;
+                  isAlarmPlaying = true;
+
+                  try {
+                      activeVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+                      if (activeVibrator != null && activeVibrator.hasVibrator()) {
+                          long[] pattern = {0, 750, 350, 750};
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              activeVibrator.vibrate(VibrationEffect.createWaveform(pattern, 0));
+                          } else {
+                              activeVibrator.vibrate(pattern, 0);
+                          }
+                      }
+                  } catch (Exception ignored) {}
+
+                  if (volumePct <= 0) {
+                      lockedTargetVol = 0;
+                      return;
+                  }
+
+                  try {
+                      audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                      if (audioManager != null) {
+                          originalAlarmVol = audioManager.getStreamVolume(AudioManager.STREAM_ALARM);
+                          int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM);
+                          int clamped = Math.max(1, Math.min(100, volumePct));
+                          lockedTargetVol = Math.max(1, Math.round((clamped / 100.0f) * maxVol));
+                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
+
+                          volEnforcer = new Runnable() {
+                              @Override
+                              public void run() {
+                                  if (!isAlarmPlaying) return;
+                                  try {
+                                      if (audioManager.getStreamVolume(AudioManager.STREAM_ALARM) != lockedTargetVol) {
+                                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, lockedTargetVol, 0);
+                                      }
+                                  } catch (Exception ignored) {}
+                                  handler.postDelayed(this, 200);
+                              }
+                          };
+                          handler.postDelayed(volEnforcer, 200);
+                      }
+
+                      activePlayer = new MediaPlayer();
+                      activePlayer.setAudioAttributes(
+                          new AudioAttributes.Builder()
+                              .setUsage(AudioAttributes.USAGE_ALARM)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                              .build()
+                      );
+
+                      boolean customLoaded = false;
+                      if (wantCustomAudio) {
+                          File customFile = new File(getFilesDir(), "custom_ring.dat");
+                          if (customFile.exists() && customFile.length() > 100) {
+                              try {
+                                  activePlayer.setDataSource(customFile.getAbsolutePath());
+                                  activePlayer.setLooping(true);
+                                  activePlayer.prepare();
+                                  activePlayer.start();
+                                  customLoaded = true;
+                              } catch (Exception e) {
+                                  activePlayer.reset();
+                              }
+                          }
+                      }
+
+                      if (!customLoaded) {
+                          int resId = getResources().getIdentifier("alert", "raw", getPackageName());
+                          Uri soundUri = (resId != 0)
+                              ? Uri.parse("android.resource://" + getPackageName() + "/" + resId)
+                              : RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+                          if (soundUri == null) {
+                              soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                          }
+                          activePlayer.setDataSource(this, soundUri);
+                          activePlayer.setLooping(true);
+                          activePlayer.prepare();
+                          activePlayer.start();
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void stopMediaAndVibrationOnly() {
+                  isAlarmPlaying = false;
+                  if (handler != null && volEnforcer != null) {
+                      handler.removeCallbacks(volEnforcer);
+                  }
+                  try {
+                      if (activeVibrator != null) {
+                          activeVibrator.cancel();
+                          activeVibrator = null;
+                      }
+                      if (activePlayer != null) {
+                          if (activePlayer.isPlaying()) activePlayer.stop();
+                          activePlayer.release();
+                          activePlayer = null;
+                      }
+                      if (audioManager != null && originalAlarmVol >= 0) {
+                          audioManager.setStreamVolume(AudioManager.STREAM_ALARM, originalAlarmVol, 0);
+                          originalAlarmVol = -1;
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void stopAlarmAndReportSeen() {
+                  stopMediaAndVibrationOnly();
+                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                  if (nm != null) nm.cancel(911);
+
+                  Intent closeUi = new Intent("com.ayan.expenselive.CLOSE_ALERT_UI");
+                  closeUi.setPackage(getPackageName());
+                  sendBroadcast(closeUi);
+
+                  SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                  String deviceId = prefs.getString("device_id", "");
+                  String deviceLabel = prefs.getString("device_label", Build.MODEL);
+                  String alId = currentRingingAlertId;
+                  currentRingingAlertId = "";
+
+                  if (!deviceId.isEmpty() && !alId.isEmpty()) {
+                      new Thread(() -> {
+                          try {
+                              JSONObject body = new JSONObject();
+                              body.put("state", "seen");
+                              body.put("deviceLabel", deviceLabel);
+                              body.put("updatedAt", System.currentTimeMillis());
+                              httpPutJson(FB_DB + "/alert_status/" + alId + "/" + deviceId + ".json", body.toString());
+                          } catch (Exception ignored) {}
+                      }).start();
                   }
               }
 
@@ -590,6 +623,10 @@ jobs:
                               return;
                           }
 
+                          // Keep custom audio pre-cached in background
+                          syncCustomAudioIfUpdated(deviceId, prefs);
+
+                          // Check instant expense update notification
                           try {
                               String expRaw = httpGet(FB_DB + "/latest_expense_notif.json");
                               if (expRaw != null && !expRaw.trim().equals("null") && !expRaw.trim().isEmpty()) {
@@ -608,6 +645,7 @@ jobs:
                               }
                           } catch (Exception ignored) {}
 
+                          // Check Priority Ring Alert
                           String alertRaw = httpGet(FB_DB + "/active_alert.json");
                           if (alertRaw == null || alertRaw.trim().equals("null") || alertRaw.trim().isEmpty()) return;
 
@@ -625,24 +663,22 @@ jobs:
                               if ("ALL".equals(target) || deviceId.equals(target)) {
                                   prefs.edit().putString("last_fb_alert_id", alertId).apply();
 
-                                  boolean hasCustom = false;
-                                  if (wantCustomAudio) {
-                                      hasCustom = prepareCustomAudio(deviceId, prefs);
-                                  }
+                                  // 1. Start ringing IMMEDIATELY inside the Service (no tap needed!)
+                                  handler.post(() -> startImmediateServiceRing(alertId, volume, wantCustomAudio));
 
+                                  // 2. Report ringing status
                                   JSONObject st = new JSONObject();
                                   st.put("state", "ringing");
                                   st.put("deviceLabel", deviceLabel);
                                   st.put("updatedAt", System.currentTimeMillis());
                                   httpPutJson(FB_DB + "/alert_status/" + alertId + "/" + deviceId + ".json", st.toString());
 
-                                  launchFullScreenRing(alertId, msg, volume, hasCustom);
+                                  // 3. Launch Full-Screen UI + Notification with STOP button
+                                  launchFullScreenRing(alertId, msg, volume);
                               }
                           } else if ("stopped".equals(status) && !alertId.equals(prefs.getString("last_stopped_id", ""))) {
                               prefs.edit().putString("last_stopped_id", alertId).apply();
-                              Intent stopIntent = new Intent("com.ayan.expenselive.STOP_ALARM");
-                              stopIntent.setPackage(getPackageName());
-                              sendBroadcast(stopIntent);
+                              handler.post(this::stopAlarmAndReportSeen);
                           }
                       } catch (Exception ignored) {
                       } finally {
@@ -677,7 +713,7 @@ jobs:
                   }).start();
               }
 
-              private void launchFullScreenRing(String alertId, String msg, int volume, boolean useCustomAudio) {
+              private void launchFullScreenRing(String alertId, String msg, int volume) {
                   try {
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null) {
@@ -693,7 +729,6 @@ jobs:
                   fullScreenIntent.putExtra("alertId", alertId);
                   fullScreenIntent.putExtra("msg", msg);
                   fullScreenIntent.putExtra("volume", volume);
-                  fullScreenIntent.putExtra("useCustomAudio", useCustomAudio);
                   fullScreenIntent.addFlags(
                       Intent.FLAG_ACTIVITY_NEW_TASK |
                       Intent.FLAG_ACTIVITY_CLEAR_TOP |
@@ -705,14 +740,20 @@ jobs:
                       this, 911, fullScreenIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
                   );
 
+                  Intent stopActionIntent = new Intent(this, StopAlarmReceiver.class);
+                  PendingIntent stopPendingIntent = PendingIntent.getBroadcast(
+                      this, 912, stopActionIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                  );
+
                   NotificationCompat.Builder builder = new NotificationCompat.Builder(this, FULLSCREEN_CHANNEL)
                       .setSmallIcon(android.R.drawable.ic_dialog_email)
                       .setContentTitle("🔔 Ayan Karmakar")
                       .setContentText(msg)
                       .setPriority(NotificationCompat.PRIORITY_MAX)
                       .setCategory(NotificationCompat.CATEGORY_ALARM)
+                      .setOngoing(true)
                       .setFullScreenIntent(fullScreenPendingIntent, true)
-                      .setAutoCancel(true);
+                      .addAction(android.R.drawable.ic_media_pause, "⏹ STOP ALARM", stopPendingIntent);
 
                   NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                   nm.notify(911, builder.build());
@@ -735,6 +776,7 @@ jobs:
 
                       NotificationChannel fullScreen = new NotificationChannel(FULLSCREEN_CHANNEL, "Priority Ring Alerts", NotificationManager.IMPORTANCE_HIGH);
                       fullScreen.setBypassDnd(true);
+                      fullScreen.setSound(null, null); // Service plays custom alarm stream directly
                       nm.createNotificationChannel(fullScreen);
                   }
               }
@@ -775,6 +817,7 @@ jobs:
 
               @Override
               public void onDestroy() {
+                  stopMediaAndVibrationOnly();
                   if (handler != null) {
                       handler.removeCallbacks(fbChecker);
                       handler.removeCallbacks(sheetChecker);
@@ -784,7 +827,7 @@ jobs:
           }
           EOF
 
-          # 4. Boot & Watchdog Receiver
+          # 5. Boot & Watchdog Receiver
           cat << 'EOF' > "$PKG_DIR/WatchdogReceiver.java"
           package com.ayan.expenselive;
           import android.content.BroadcastReceiver;
@@ -804,12 +847,13 @@ jobs:
           }
           EOF
 
-          # 5. MainActivity with Xiaomi/Redmi Background Popup Permission Wizard
+          # 6. MainActivity with CCleaner-Style Mandatory Permission Gate
           cat << 'EOF' > "$PKG_DIR/MainActivity.java"
           package com.ayan.expenselive;
 
           import android.Manifest;
           import android.app.AlarmManager;
+          import android.app.AppOpsManager;
           import android.app.PendingIntent;
           import android.app.admin.DevicePolicyManager;
           import android.content.ComponentName;
@@ -817,13 +861,24 @@ jobs:
           import android.content.Intent;
           import android.content.SharedPreferences;
           import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
           import android.os.PowerManager;
+          import android.os.Process;
           import android.os.SystemClock;
           import android.provider.Settings;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
           import android.webkit.JavascriptInterface;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
           import android.widget.Toast;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
@@ -832,11 +887,10 @@ jobs:
           public class MainActivity extends BridgeActivity {
               private DevicePolicyManager dpm;
               private ComponentName adminComp;
-              private boolean askedNotif = false;
-              private boolean askedOverlay = false;
-              private boolean askedOemPopup = false;
-              private boolean askedBattery = false;
-              private boolean askedAdmin = false;
+              private ScrollView permissionGateView;
+              private LinearLayout checklistContainer;
+              private Button grantNextBtn;
+              private TextView gateSubtitle;
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
@@ -844,6 +898,7 @@ jobs:
                   dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
                   adminComp = new ComponentName(this, AdminReceiver.class);
 
+                  buildMandatoryPermissionGate();
                   startMonitorAndWatchdog();
 
                   this.bridge.getWebView().addJavascriptInterface(new Object() {
@@ -870,7 +925,7 @@ jobs:
 
                       @JavascriptInterface
                       public void openSpecialPermissions() {
-                          runOnUiThread(() -> openOemBackgroundPopupSettings());
+                          runOnUiThread(() -> openOemPopupSettings());
                       }
 
                       @JavascriptInterface
@@ -879,6 +934,7 @@ jobs:
                               if (dpm.isAdminActive(adminComp)) {
                                   dpm.removeActiveAdmin(adminComp);
                                   Toast.makeText(MainActivity.this, "Uninstall protection disabled!", Toast.LENGTH_LONG).show();
+                                  refreshPermissionGate();
                               } else {
                                   Toast.makeText(MainActivity.this, "Already unlocked!", Toast.LENGTH_SHORT).show();
                               }
@@ -887,8 +943,164 @@ jobs:
                   }, "AndroidBridge");
               }
 
-              private void openOemBackgroundPopupSettings() {
-                  Toast.makeText(this, "Enable 'Display pop-up windows while running in background' & 'Autostart'", Toast.LENGTH_LONG).show();
+              private void buildMandatoryPermissionGate() {
+                  permissionGateView = new ScrollView(this);
+                  permissionGateView.setBackgroundColor(Color.parseColor("#0B0914"));
+                  permissionGateView.setFillViewport(true);
+
+                  LinearLayout wrapper = new LinearLayout(this);
+                  wrapper.setOrientation(LinearLayout.VERTICAL);
+                  wrapper.setGravity(Gravity.CENTER);
+                  wrapper.setPadding(52, 70, 52, 70);
+
+                  TextView shieldIcon = new TextView(this);
+                  shieldIcon.setText("🛡️");
+                  shieldIcon.setTextSize(46f);
+                  shieldIcon.setGravity(Gravity.CENTER);
+                  wrapper.addView(shieldIcon);
+
+                  TextView title = new TextView(this);
+                  title.setText("Required App Permissions");
+                  title.setTextColor(Color.WHITE);
+                  title.setTextSize(22f);
+                  title.setTypeface(null, Typeface.BOLD);
+                  title.setGravity(Gravity.CENTER);
+                  title.setPadding(0, 14, 0, 8);
+                  wrapper.addView(title);
+
+                  gateSubtitle = new TextView(this);
+                  gateSubtitle.setText("Grant all required permissions one by one to unlock the app.");
+                  gateSubtitle.setTextColor(Color.parseColor("#94A3B8"));
+                  gateSubtitle.setTextSize(13.5f);
+                  gateSubtitle.setGravity(Gravity.CENTER);
+                  gateSubtitle.setPadding(0, 0, 0, 36);
+                  wrapper.addView(gateSubtitle);
+
+                  checklistContainer = new LinearLayout(this);
+                  checklistContainer.setOrientation(LinearLayout.VERTICAL);
+                  LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  );
+                  listParams.setMargins(0, 0, 0, 40);
+                  checklistContainer.setLayoutParams(listParams);
+                  wrapper.addView(checklistContainer);
+
+                  grantNextBtn = new Button(this);
+                  grantNextBtn.setText("GRANT NEXT PERMISSION →");
+                  grantNextBtn.setTextColor(Color.WHITE);
+                  grantNextBtn.setTextSize(16f);
+                  grantNextBtn.setTypeface(null, Typeface.BOLD);
+                  GradientDrawable btnBg = new GradientDrawable();
+                  btnBg.setColor(Color.parseColor("#9333EA"));
+                  btnBg.setCornerRadius(32f);
+                  grantNextBtn.setBackground(btnBg);
+                  grantNextBtn.setPadding(40, 42, 40, 42);
+                  grantNextBtn.setOnClickListener(v -> triggerNextMissingPermission());
+                  wrapper.addView(grantNextBtn);
+
+                  permissionGateView.addView(wrapper);
+                  addContentView(permissionGateView, new ViewGroup.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT,
+                      ViewGroup.LayoutParams.MATCH_PARENT
+                  ));
+              }
+
+              private boolean hasNotifPerm() {
+                  if (Build.VERSION.SDK_INT < 33) return true;
+                  return ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+              }
+
+              private boolean hasOverlayPerm() {
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+                  return Settings.canDrawOverlays(this);
+              }
+
+              private boolean isXiaomiDevice() {
+                  String m = Build.MANUFACTURER != null ? Build.MANUFACTURER.toLowerCase() : "";
+                  return m.contains("xiaomi") || m.contains("redmi") || m.contains("poco");
+              }
+
+              private boolean hasOemPopupPerm() {
+                  if (!isXiaomiDevice()) return true;
+                  try {
+                      AppOpsManager ops = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+                      java.lang.reflect.Method m = AppOpsManager.class.getMethod("checkOpNoThrow", int.class, int.class, String.class);
+                      int res = (int) m.invoke(ops, 10021, Process.myUid(), getPackageName());
+                      return res == AppOpsManager.MODE_ALLOWED;
+                  } catch (Exception e) {
+                      SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                      return prefs.getBoolean("oem_popup_confirmed", false);
+                  }
+              }
+
+              private boolean hasBatteryPerm() {
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+                  PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                  return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+              }
+
+              private boolean hasAdminPerm() {
+                  return dpm != null && dpm.isAdminActive(adminComp);
+              }
+
+              private void addChecklistRow(String label, boolean granted) {
+                  LinearLayout row = new LinearLayout(this);
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  row.setGravity(Gravity.CENTER_VERTICAL);
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(Color.parseColor("#151226"));
+                  bg.setStroke(2, Color.parseColor(granted ? "#10B981" : "#334155"));
+                  bg.setCornerRadius(24f);
+                  row.setBackground(bg);
+                  row.setPadding(36, 30, 36, 30);
+
+                  LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                      LinearLayout.LayoutParams.MATCH_PARENT,
+                      LinearLayout.LayoutParams.WRAP_CONTENT
+                  );
+                  rp.setMargins(0, 0, 0, 22);
+                  row.setLayoutParams(rp);
+
+                  TextView tv = new TextView(this);
+                  tv.setText((granted ? "✅  " : "⏳  ") + label);
+                  tv.setTextColor(Color.parseColor(granted ? "#34D399" : "#F8FAFC"));
+                  tv.setTextSize(15f);
+                  tv.setTypeface(null, Typeface.BOLD);
+                  row.addView(tv);
+                  checklistContainer.addView(row);
+              }
+
+              private void refreshPermissionGate() {
+                  boolean p1 = hasNotifPerm();
+                  boolean p2 = hasOverlayPerm();
+                  boolean p3 = hasOemPopupPerm();
+                  boolean p4 = hasBatteryPerm();
+                  boolean p5 = hasAdminPerm();
+
+                  if (p1 && p2 && p3 && p4 && p5) {
+                      permissionGateView.setVisibility(View.GONE);
+                      startMonitorAndWatchdog();
+                      return;
+                  }
+
+                  permissionGateView.setVisibility(View.VISIBLE);
+                  permissionGateView.bringToFront();
+                  checklistContainer.removeAllViews();
+
+                  addChecklistRow("1. Notifications & Sound Alerts", p1);
+                  addChecklistRow("2. Display Over Other Apps", p2);
+                  if (isXiaomiDevice()) {
+                      addChecklistRow("3. Background Pop-up & Autostart", p3);
+                  }
+                  addChecklistRow((isXiaomiDevice() ? "4" : "3") + ". Unrestricted Battery Usage", p4);
+                  addChecklistRow((isXiaomiDevice() ? "5" : "4") + ". Uninstall Protection (Admin)", p5);
+              }
+
+              private void openOemPopupSettings() {
+                  SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
+                  prefs.edit().putBoolean("oem_popup_confirmed", true).apply();
+                  Toast.makeText(this, "Turn ON 'Display pop-up windows while running in background' & 'Autostart'", Toast.LENGTH_LONG).show();
                   try {
                       Intent miui = new Intent("miui.intent.action.APP_PERM_EDITOR");
                       miui.setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity");
@@ -897,9 +1109,40 @@ jobs:
                       return;
                   } catch (Exception ignored) {}
                   try {
-                      Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()));
-                      startActivity(details);
+                      startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
                   } catch (Exception ignored) {}
+              }
+
+              private void triggerNextMissingPermission() {
+                  if (!hasNotifPerm()) {
+                      ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 501);
+                      return;
+                  }
+                  if (!hasOverlayPerm()) {
+                      Toast.makeText(this, "Find 'Campus Expense Live' and turn ON", Toast.LENGTH_LONG).show();
+                      startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
+                      return;
+                  }
+                  if (!hasOemPopupPerm()) {
+                      openOemPopupSettings();
+                      return;
+                  }
+                  if (!hasBatteryPerm()) {
+                      try {
+                          Intent batt = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                          batt.setData(Uri.parse("package:" + getPackageName()));
+                          startActivity(batt);
+                      } catch (Exception e) {
+                          startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                      }
+                      return;
+                  }
+                  if (!hasAdminPerm()) {
+                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp);
+                      intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Protects app from accidental uninstallation.");
+                      startActivity(intent);
+                  }
               }
 
               private void startMonitorAndWatchdog() {
@@ -909,7 +1152,6 @@ jobs:
                   } else {
                       startService(serviceIntent);
                   }
-
                   try {
                       AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
                       Intent wdIntent = new Intent(this, WatchdogReceiver.class);
@@ -921,63 +1163,22 @@ jobs:
               }
 
               @Override
-              public void onResume() {
-                  super.onResume();
-                  setupNextPermission();
+              public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+                  refreshPermissionGate();
               }
 
-              private void setupNextPermission() {
-                  if (Build.VERSION.SDK_INT >= 33 && !askedNotif) {
-                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                          askedNotif = true;
-                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 501);
-                          return;
-                      }
-                  }
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this) && !askedOverlay) {
-                      askedOverlay = true;
-                      Toast.makeText(this, "Enable 'Display over other apps' for full-screen ring", Toast.LENGTH_LONG).show();
-                      try {
-                          startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
-                          return;
-                      } catch (Exception ignored) {}
-                  }
-                  String mfr = Build.MANUFACTURER != null ? Build.MANUFACTURER.toLowerCase() : "";
-                  if (!askedOemPopup && (mfr.contains("xiaomi") || mfr.contains("redmi") || mfr.contains("poco"))) {
-                      SharedPreferences prefs = getSharedPreferences("ExpenseLivePrefs", Context.MODE_PRIVATE);
-                      if (!prefs.getBoolean("oem_popup_prompted", false)) {
-                          askedOemPopup = true;
-                          prefs.edit().putBoolean("oem_popup_prompted", true).apply();
-                          openOemBackgroundPopupSettings();
-                          return;
-                      }
-                  }
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !askedBattery) {
-                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                      if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
-                          askedBattery = true;
-                          try {
-                              Intent battIntent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                              battIntent.setData(Uri.parse("package:" + getPackageName()));
-                              startActivity(battIntent);
-                              return;
-                          } catch (Exception ignored) {}
-                      }
-                  }
-                  if (!dpm.isAdminActive(adminComp) && !askedAdmin) {
-                      askedAdmin = true;
-                      Intent intent = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
-                      intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComp);
-                      intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Prevents accidental uninstallation and keeps live sync active.");
-                      startActivity(intent);
-                  }
+              @Override
+              public void onResume() {
+                  super.onResume();
+                  refreshPermissionGate();
               }
           }
           EOF
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's/<application/<uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"\/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"\/>\n    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"\/>\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"\/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"\/>\n    <uses-permission android:name="android.permission.VIBRATE"\/>\n    <application/' "$MANIFEST"
-          sed -i 's/<\/application>/        <activity android:name=".EmergencyAlertActivity" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:exported="false" \/>\n        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".WatchdogReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
+          sed -i 's/<\/application>/        <activity android:name=".EmergencyAlertActivity" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:exported="false" \/>\n        <service android:name=".LiveMonitorService" android:foregroundServiceType="dataSync" android:exported="false" \/>\n        <receiver android:name=".StopAlarmReceiver" android:exported="false" \/>\n        <receiver android:name=".AdminReceiver" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">\n            <meta-data android:name="android.app.device_admin" android:resource="@xml\/device_admin_policy" \/>\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" \/>\n            <\/intent-filter>\n        <\/receiver>\n        <receiver android:name=".WatchdogReceiver" android:exported="true">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED" \/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" \/>\n            <\/intent-filter>\n        <\/receiver>\n    <\/application>/' "$MANIFEST"
 
           npx cap sync android
 
@@ -991,10 +1192,9 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.3.${{ github.run_number }}
-          name: Campus Expense Live v4.3.${{ github.run_number }}
-          body: "MIUI Background Popup Permission Fix + Hardware Volume Lock + 15MB Chunked Audio + Admin-Controlled Uninstall PIN"
+          tag_name: v5.0.${{ github.run_number }}
+          name: Campus Expense Live v5.0.${{ github.run_number }}
+          body: "CCleaner-Style Mandatory Permission Gate + Immediate Service Alarm + Volume Lock + Pre-Cached 15MB Custom Audio"
           files: Campus-Expense-Live.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-৫
